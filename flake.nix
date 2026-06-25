@@ -28,14 +28,21 @@
       sync = tools;
     });
 
-    apps = forAllSystems (system: {
+    apps = forAllSystems (system: let
+      pkgs = pkgsFor system;
+      bin = "${self.packages.${system}.default}/bin/pt";
+    in {
       sync = {
         type = "app";
-        program = "${self.packages.${system}.default}/bin/pt";
+        program = "${pkgs.writeShellScriptBin "phenix-sync" ''
+          exec ${bin} sync "$@"
+        ''}/bin/phenix-sync";
       };
       default = {
         type = "app";
-        program = "${self.packages.${system}.default}/bin/pt";
+        program = "${pkgs.writeShellScriptBin "phenix-tools" ''
+          exec ${bin} "$@"
+        ''}/bin/phenix-tools";
       };
     });
   };
