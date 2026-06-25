@@ -1,12 +1,12 @@
-{ config, pkgs, ... }: let
-  tools = pkgs.rustPlatform.buildRustPackage {
-    pname = "phenix-tools";
-    version = "0.1.0";
-    src = ../.;
-    cargoLock.lockFile = ../Cargo.lock;
-  };
-in {
-  perSystem = {
+{ ... }: {
+  perSystem = { config, pkgs, ... }: let
+    tools = pkgs.rustPlatform.buildRustPackage {
+      pname = "phenix-tools";
+      version = "0.1.0";
+      src = ../.;
+      cargoLock.lockFile = ../Cargo.lock;
+    };
+  in {
     packages.sync = tools;
     packages.default = tools;
 
