@@ -6,24 +6,37 @@
     nixpkgs.follows = "phenix-pins/nixpkgs";
   };
 
-  outputs = inputs: {
-    packages.x86_64-linux.sync = (import inputs.nixpkgs {
-      system = "x86_64-linux";
-    }).writeShellApplication {
-      name = "phenix-sync";
-      text = ''
-        echo "phenix-sync: TODO implement sync tool"
-        echo "Usage: sync [graph|plan|check]"
-      '';
-    };
+  outputs = { self, nixpkgs, ... }: let
+    systems = [ "x86_64-linux" "aarch64-linux" ];
+    forAllSystems = f:
+      builtins.listToAttrs (map (sys: {
+        name = sys;
+        value = f sys;
+      }) systems);
+    pkgsFor = system: import nixpkgs { inherit system; };
+  in {
+    packages = forAllSystems (system: let
+      pkgs = pkgsFor system;
+      tools = pkgs.rustPlatform.buildRustPackage {
+        pname = "phenix-tools";
+        version = "0.1.0";
+        src = ./.;
+        cargoLock.lockFile = ./Cargo.lock;
+      };
+    in {
+      default = tools;
+      sync = tools;
+    });
 
-    packages.x86_64-linux.default = inputs.self.packages.x86_64-linux.sync;
-
-    apps.x86_64-linux.sync = {
-      type = "app";
-      program = "${inputs.self.packages.x86_64-linux.sync}/bin/phenix-sync";
-    };
-
-    apps.x86_64-linux.default = inputs.self.apps.x86_64-linux.sync;
+    apps = forAllSystems (system: {
+      sync = {
+        type = "app";
+        program = "${self.packages.${system}.default}/bin/pt";
+      };
+      default = {
+        type = "app";
+        program = "${self.packages.${system}.default}/bin/pt";
+      };
+    });
   };
 }
