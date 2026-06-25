@@ -6,15 +6,20 @@
       src = ../.;
       cargoLock.lockFile = ../Cargo.lock;
     };
+    stitchPkg = pkgs.rustPlatform.buildRustPackage {
+      pname = "stitch";
+      version = "0.1.0";
+      src = ../.;
+      cargoLock.lockFile = ../Cargo.lock;
+      cargoBuildFlags = "-p stitch";
+    };
   in {
-    packages.sync = tools;
+    packages.stitch = stitchPkg;
     packages.default = tools;
 
-    apps.sync = {
+    apps.stitch = {
       type = "app";
-      program = "${pkgs.writeShellScriptBin "phenix-sync" ''
-        exec ${tools}/bin/pt sync "$@"
-      ''}/bin/phenix-sync";
+      program = "${stitchPkg}/bin/stitch";
     };
     apps.default = {
       type = "app";

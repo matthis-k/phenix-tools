@@ -248,7 +248,7 @@ fn should_run_step(step: &Step) -> bool {
     !step.command.is_empty() || !step.paths.is_empty() || !step.patterns.is_empty()
 }
 
-fn task_matches_paths(patterns: &[String], changed_files: &[String]) -> bool {
+pub fn task_matches_paths(patterns: &[String], changed_files: &[String]) -> bool {
     let mut builder = GlobSetBuilder::new();
     for p in patterns {
         let glob = match GlobBuilder::new(p)

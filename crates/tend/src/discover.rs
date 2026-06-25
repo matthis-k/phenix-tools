@@ -63,6 +63,7 @@ fn is_ignored_dir(name: &str) -> bool {
     IGNORED_DIRS.contains(&name) || name.starts_with("result-")
 }
 
+#[derive(Clone)]
 pub struct DiscoveredNode {
     pub config_path: PathBuf,
     pub node_path: PathBuf,
@@ -163,7 +164,7 @@ pub fn discover_configs(
     Ok(nodes)
 }
 
-pub fn resolve_nodes(root: &Path, discovered: Vec<DiscoveredNode>) -> Vec<ResolvedNode> {
+pub fn resolve_nodes(_root: &Path, discovered: Vec<DiscoveredNode>) -> Vec<ResolvedNode> {
     discovered
         .into_iter()
         .map(|d| config::resolve_node(&d.config_path, &d.node_path, d.node_config))

@@ -13,18 +13,19 @@
       cargoLock.lockFile = ../Cargo.lock;
       cargoBuildFlags = "-p tend";
     };
+    stitchPkg = pkgs.rustPlatform.buildRustPackage {
+      pname = "stitch";
+      version = "0.1.0";
+      src = ../.;
+      cargoLock.lockFile = ../Cargo.lock;
+      cargoBuildFlags = "-p stitch";
+    };
   in {
-    packages.sync = tools;
     packages.gate = tools;
     packages.tend = tendPkg;
+    packages.stitch = stitchPkg;
     packages.default = tools;
 
-    apps.sync = {
-      type = "app";
-      program = "${pkgs.writeShellScriptBin "phenix-sync" ''
-        exec ${tools}/bin/pt sync "$@"
-      ''}/bin/phenix-sync";
-    };
     apps.gate = {
       type = "app";
       program = "${pkgs.writeShellScriptBin "phenix-gate" ''
@@ -34,6 +35,10 @@
     apps.tend = {
       type = "app";
       program = "${tendPkg}/bin/tend";
+    };
+    apps.stitch = {
+      type = "app";
+      program = "${stitchPkg}/bin/stitch";
     };
     apps.default = {
       type = "app";

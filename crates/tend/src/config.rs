@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::model::{NodeConfig, ResolvedNode, ResolvedTask, TendConfig};
+use crate::model::{NodeConfig, ResolvedNode, ResolvedTask};
 
 #[derive(Debug)]
 pub enum ConfigError {

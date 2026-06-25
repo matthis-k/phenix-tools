@@ -7,6 +7,10 @@ edition = "2021"
 name = "tend"
 path = "src/main.rs"
 
+[lib]
+name = "tend"
+path = "src/lib.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

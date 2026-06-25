@@ -29,6 +29,31 @@ enum Commands {
     Tree,
     /// List all discovered tasks
     List,
+    /// Show config health and known checks (read-only)
+    Status {
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
+    },
+    /// Show which checks would run and why (read-only check plan)
+    Plan {
+        /// Match mode: changed, staged, all
+        #[arg(long, default_value = "changed")]
+        mode: String,
+        /// Only show checks in this group
+        #[arg(long)]
+        group: Option<String>,
+        /// Only show this target
+        #[arg(long)]
+        target: Option<String>,
+        /// Git base ref for diff
+        #[arg(long)]
+        base: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+        /// Explicit file paths (use with --mode selected)
+        files: Vec<String>,
+    },
     /// Run non-mutating verification tasks
     Verify {
         #[command(subcommand)]
@@ -81,6 +106,10 @@ fn main() {
     let exit_code = match cli.command {
         Commands::Tree => cmd_tree(&root, configs.as_deref()),
         Commands::List => cmd_list(&root, configs.as_deref()),
+        Commands::Status { json } => cmd_status(&root, configs.as_deref(), json),
+        Commands::Plan { mode, group, target, base: _, json, files } => {
+            cmd_plan(&root, configs.as_deref(), &mode, group.as_deref(), target.as_deref(), &files, json)
+        },
         Commands::Verify { mode } => cmd_verify(&root, configs.as_deref(), &mode),
         Commands::Fix { mode } => cmd_fix(&root, configs.as_deref(), &mode),
         Commands::Generate { mode } => cmd_generate(&root, configs.as_deref(), &mode),
@@ -280,4 +309,183 @@ fn cmd_generate(
 
 fn cmd_gate(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> {
     cmd_run(root, configs, "verify", "changed")
+}
+
+fn cmd_status(root: &PathBuf, configs: Option<&[PathBuf]>, json: bool) -> Result<i32, String> {
+    let discovered = discover::discover_configs(root, configs)
+        .map_err(|e| format!("discovery failed: {e}"))?;
+    let nodes = discover::resolve_nodes(root, discovered);
+
+    if json {
+        let entries: Vec<serde_json::Value> = nodes.iter().map(|n| {
+            serde_json::json!({
+                "node_path": n.node_path.to_string_lossy(),
+                "id": n.id,
+                "description": n.description,
+                "tags": n.tags,
+                "tasks": n.tasks.len()
+            })
+        }).collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "configs": entries, "total": entries.len()
+        })).unwrap());
+    } else {
+        println!("Tend workspace status (root: {})", root.display());
+        for node in &nodes {
+            println!("  {}  ({})", node.id, node.node_path.to_string_lossy());
+            println!("    tasks: {}", node.tasks.len());
+            if !node.tags.is_empty() {
+                println!("    tags: {}", node.tags.join(", "));
+            }
+            println!();
+        }
+        println!("Total: {} configs, {} tasks",
+            nodes.len(),
+            nodes.iter().map(|n| n.tasks.len()).sum::<usize>());
+    }
+    Ok(0)
+}
+
+fn cmd_plan(
+    root: &PathBuf,
+    configs: Option<&[PathBuf]>,
+    mode: &str,
+    group: Option<&str>,
+    target: Option<&str>,
+    files: &[String],
+    json: bool,
+) -> Result<i32, String> {
+    let discovered = discover::discover_configs(root, configs)
+        .map_err(|e| format!("discovery failed: {e}"))?;
+    let nodes = discover::resolve_nodes(root, discovered);
+
+    let changed_files = if mode == "changed" || mode == "staged" {
+        Some(get_changed_files(root).unwrap_or_default())
+    } else if !files.is_empty() {
+        Some(files.to_vec())
+    } else {
+        None
+    };
+    let changed_ref = changed_files.as_deref();
+
+    if json {
+        let mut checks: Vec<serde_json::Value> = Vec::new();
+        for node in &nodes {
+            for task in &node.tasks {
+                if let Some(g) = group { if node.id != *g { continue; } }
+                if let Some(t) = target { if task.config.id != *t { continue; } }
+
+                let matched_files: Vec<String> = match (mode, changed_ref) {
+                    ("changed" | "staged", Some(cf)) => {
+                        if let Some(ref when) = task.config.when {
+                            if let Some(ref changed) = when.changed {
+                                cf.iter().filter(|f| {
+                                    planner::task_matches_paths(&changed.paths, &[(*f).clone()])
+                                }).cloned().collect()
+                            } else { vec![] }
+                        } else { vec![] }
+                    },
+                    _ => vec![],
+                };
+
+                let should_run = match mode {
+                    "all" | "force" => true,
+                    _ => {
+                        if let Some(ref when) = task.config.when {
+                            if let Some(ref changed) = when.changed {
+                                if let Some(cf) = changed_ref {
+                                    planner::task_matches_paths(&changed.paths, cf)
+                                } else { true }
+                            } else { true }
+                        } else { true }
+                    }
+                };
+
+                if !should_run { continue; }
+
+                let reason = if !matched_files.is_empty() {
+                    format!("matched {} pattern(s)", matched_files.len())
+                } else if mode == "all" {
+                    "selected by --mode all".to_string()
+                } else {
+                    "selected explicitly".to_string()
+                };
+
+                checks.push(serde_json::json!({
+                    "id": task.config.id,
+                    "group": node.id,
+                    "kind": task.config.kind,
+                    "phase": task.config.phase,
+                    "reason": reason,
+                    "files": matched_files,
+                    "depends_on": []
+                }));
+            }
+        }
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "checks": checks,
+            "total": checks.len()
+        })).unwrap());
+    } else {
+        println!("Checks that would run (mode: {}):", mode);
+        println!();
+        let mut idx = 0u32;
+        for node in &nodes {
+            for task in &node.tasks {
+                if let Some(g) = group { if node.id != *g { continue; } }
+                if let Some(t) = target { if task.config.id != *t { continue; } }
+
+                let matched_files: Vec<String> = match (mode, changed_ref) {
+                    ("changed" | "staged", Some(cf)) => {
+                        if let Some(ref when) = task.config.when {
+                            if let Some(ref changed) = when.changed {
+                                cf.iter().filter(|f| {
+                                    planner::task_matches_paths(&changed.paths, &[(*f).clone()])
+                                }).cloned().collect()
+                            } else { vec![] }
+                        } else { vec![] }
+                    },
+                    _ => vec![],
+                };
+
+                let should_run = match mode {
+                    "all" | "force" => true,
+                    _ => {
+                        if let Some(ref when) = task.config.when {
+                            if let Some(ref changed) = when.changed {
+                                if let Some(cf) = changed_ref {
+                                    planner::task_matches_paths(&changed.paths, cf)
+                                } else { true }
+                            } else { true }
+                        } else { true }
+                    }
+                };
+
+                if !should_run { continue; }
+
+                idx += 1;
+                let reason = if !matched_files.is_empty() {
+                    format!("matched **/{} pattern(s)", matched_files.len())
+                } else {
+                    "selected explicitly".to_string()
+                };
+
+                println!("{}. {}", idx, task.config.id);
+                println!("   reason: {}", reason);
+                if !matched_files.is_empty() {
+                    println!("   files:");
+                    for f in &matched_files {
+                        println!("     {}", f);
+                    }
+                }
+                println!();
+            }
+        }
+        if idx == 0 {
+            println!("  (no checks match)");
+        } else {
+            println!("Total: {} check(s) would run", idx);
+        }
+    }
+    Ok(0)
 }
