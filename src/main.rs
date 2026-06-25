@@ -87,7 +87,7 @@ fn run_sync(nodes_arg: &PathBuf, plan: bool) -> Result<(), String> {
         println!("  {}", ep);
     }
 
-    let manager = sync::SyncManager::new(base_dir);
+    let manager = sync::SyncManager::new(base_dir, base_dir);
     let dag = manager.build_dag(&resolved)?;
 
     println!("\nDependency graph:");

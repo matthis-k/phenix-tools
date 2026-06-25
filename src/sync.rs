@@ -7,12 +7,15 @@ use crate::node::SyncConfig;
 
 pub struct SyncManager {
     pub base_dir: PathBuf,
+    /// Workspace root (parent of nodes.json) for updating submodule pointers
+    pub workspace: PathBuf,
 }
 
 impl SyncManager {
-    pub fn new(base_dir: &Path) -> Self {
+    pub fn new(base_dir: &Path, workspace: &Path) -> Self {
         Self {
             base_dir: base_dir.to_path_buf(),
+            workspace: workspace.to_path_buf(),
         }
     }
 
@@ -90,6 +93,11 @@ impl SyncManager {
         let mut heads: HashMap<String, String> = HashMap::new();
         let mut completed: Vec<String> = Vec::new();
 
+        let ws_head = self.git_head(&self.workspace).ok();
+        if let Some(ref h) = ws_head {
+            heads.insert("__workspace__".to_string(), h.clone());
+        }
+
         let result = (|| -> Result<(), String> {
             for repo_name in order {
                 let repo_path = self.base_dir.join(repo_name);
@@ -129,6 +137,8 @@ impl SyncManager {
 
                 completed.push(repo_name.clone());
             }
+
+            self.update_workspace_submodules()?;
             Ok(())
         })();
 
@@ -144,9 +154,28 @@ impl SyncManager {
                     }
                 }
             }
+            if let Some(head) = heads.get("__workspace__") {
+                if self.git_has_changes(&self.workspace).unwrap_or(false) {
+                    eprintln!("  resetting workspace to {}", head);
+                    let _ = self.git_reset(&self.workspace, head);
+                }
+            }
             return Err("Sync failed and was rolled back".to_string());
         }
 
+        Ok(())
+    }
+
+    fn update_workspace_submodules(&self) -> Result<(), String> {
+        let ws = &self.workspace;
+        if self.git_has_changes(ws)? {
+            println!("  [workspace] updating submodule pointers...");
+            self.git_commit(ws, "sync: update submodule pointers")?;
+            self.git_push(ws)?;
+            println!("  [workspace] done.");
+        } else {
+            println!("  [workspace] no submodule changes.");
+        }
         Ok(())
     }
 
