@@ -21,7 +21,11 @@ pub enum ChangesetCommands {
         title: String,
     },
     /// Show current changeset status
-    Status,
+    Status {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Build/review a plan for the current changeset
     Plan {
         /// Write the plan to the active changeset
@@ -62,7 +66,7 @@ pub enum ChangesetCommands {
 pub fn dispatch(command: &ChangesetCommands) -> Result<(), String> {
     match command {
         ChangesetCommands::New { title } => new::execute(title),
-        ChangesetCommands::Status => status_cmd(),
+        ChangesetCommands::Status { json } => status_cmd(*json),
         ChangesetCommands::Plan { write, json } => plan::execute(*write, *json),
         ChangesetCommands::SetMessage { repo, message } => set_message::execute(repo, message),
         ChangesetCommands::SetFiles { repo, files } => set_files::execute(repo, files),
@@ -73,13 +77,26 @@ pub fn dispatch(command: &ChangesetCommands) -> Result<(), String> {
     }
 }
 
-fn status_cmd() -> Result<(), String> {
+fn status_cmd(json: bool) -> Result<(), String> {
     let cs = load_current()?;
     match cs {
         Some(cs) => {
-            let output = serde_json::to_string_pretty(&cs)
-                .map_err(|e| format!("JSON: {}", e))?;
-            println!("{}", output);
+            if json {
+                let output = serde_json::to_string_pretty(&cs)
+                    .map_err(|e| format!("JSON: {}", e))?;
+                println!("{}", output);
+            } else {
+                println!("Changeset: {} ({})", cs.id, cs.title);
+                println!("State: {}", cs.state);
+                println!("Workspace: {}", cs.workspace);
+                println!();
+                for rp in &cs.repos {
+                    let action = rp.action.as_deref().unwrap_or("-");
+                    let msg = rp.message.as_deref().unwrap_or("<missing>");
+                    let hash = rp.commit_hash.as_deref().unwrap_or("-");
+                    println!("  {}  action={}  message={}  hash={}", rp.name, action, msg, hash);
+                }
+            }
         }
         None => {
             println!("No active changeset.");

@@ -188,19 +188,13 @@ pub fn is_mid_merge(repo: &Path) -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_porcelain_clean() {
-        let input = "";
+    fn count_porcelain(input: &str) -> (usize, usize, usize) {
         let mut staged = 0;
         let mut unstaged = 0;
         let mut untracked = 0;
-
-        for line in input.lines() {
-            let line = line.trim();
-            if line.is_empty() { continue; }
-            let (flags, _) = line.split_at(2.min(line.len()));
+        for raw_line in input.lines() {
+            if raw_line.trim().is_empty() { continue; }
+            let flags = if raw_line.len() >= 2 { &raw_line[..2] } else { raw_line };
             match flags {
                 "??" => untracked += 1,
                 "!!" => {}
@@ -212,7 +206,12 @@ mod tests {
                 }
             }
         }
+        (staged, unstaged, untracked)
+    }
 
+    #[test]
+    fn test_parse_porcelain_clean() {
+        let (staged, unstaged, untracked) = count_porcelain("");
         assert_eq!(staged, 0);
         assert_eq!(unstaged, 0);
         assert_eq!(untracked, 0);
@@ -221,29 +220,9 @@ mod tests {
     #[test]
     fn test_parse_porcelain_dirty() {
         let input = " M modified.rs\nA  added.rs\n?? untracked.rs\n";
-
-        // Use parsing logic matching get_status
-        let mut staged = 0;
-        let mut unstaged = 0;
-        let mut untracked = 0;
-
-        for line in input.lines() {
-            if line.trim().is_empty() { continue; }
-            let flags = if line.len() >= 2 { &line[..2] } else { line };
-            match flags {
-                "??" => untracked += 1,
-                "!!" => {}
-                _ => {
-                    let c = flags.chars().next().unwrap_or(' ');
-                    let c2 = flags.chars().nth(1).unwrap_or(' ');
-                    if c != ' ' && c != '?' && c != '!' { staged += 1; }
-                    if c2 != ' ' && c2 != '?' && c2 != '!' { unstaged += 1; }
-                }
-            }
-        }
-
-        assert_eq!(staged, 1);  // "A " -> staged
-        assert_eq!(unstaged, 1); // " M" -> unstaged
-        assert_eq!(untracked, 1); // "??" -> untracked
+        let (staged, unstaged, untracked) = count_porcelain(input);
+        assert_eq!(staged, 1);
+        assert_eq!(unstaged, 1);
+        assert_eq!(untracked, 1);
     }
 }
