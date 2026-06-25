@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 
+mod gate;
 mod graph;
 mod node;
 mod sync;
@@ -21,6 +22,14 @@ enum Commands {
     Completions {
         /// Shell to generate completions for
         shell: Shell,
+    },
+    /// Run gate checks
+    Gate {
+        #[command(subcommand)]
+        command: gate::GateCommands,
+        /// Explicit path to a .phenix-checks.json file
+        #[arg(short, long)]
+        config: Option<PathBuf>,
     },
     /// Sync repos in dependency order
     Sync {
@@ -42,6 +51,13 @@ fn main() {
         Commands::Completions { shell } => {
             let mut cmd = Cli::command();
             generate(shell, &mut cmd, "phenix-tools", &mut std::io::stdout());
+        }
+        Commands::Gate { command, config } => {
+            let workspace_root = &std::env::current_dir().unwrap_or_default();
+            if let Err(e) = gate::dispatch(command, config, workspace_root) {
+                eprintln!("error: {}", e);
+                std::process::exit(1);
+            }
         }
         Commands::Sync { nodes, message, plan } => {
             if let Err(e) = run_sync(&nodes, message, plan) {

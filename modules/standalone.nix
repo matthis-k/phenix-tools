@@ -8,6 +8,7 @@
     };
   in {
     packages.sync = tools;
+    packages.gate = tools;
     packages.default = tools;
 
     apps.sync = {
@@ -15,6 +16,12 @@
       program = "${pkgs.writeShellScriptBin "phenix-sync" ''
         exec ${tools}/bin/pt sync "$@"
       ''}/bin/phenix-sync";
+    };
+    apps.gate = {
+      type = "app";
+      program = "${pkgs.writeShellScriptBin "phenix-gate" ''
+        exec ${tools}/bin/pt gate "$@"
+      ''}/bin/phenix-gate";
     };
     apps.default = {
       type = "app";
