@@ -127,7 +127,7 @@ impl SyncManager {
                         self.nix_flake_update(&repo_path, input)?;
 
                         if self.git_has_changes(&repo_path)? {
-                            let msg = self.commit_msg(&format!("update/sync: {}", input));
+                            let msg = self.commit_msg(&format!("sync(automated): {}", input));
                             println!("    committing: {}", msg);
                             self.git_commit(&repo_path, &msg)?;
                             self.git_push(&repo_path)?;
