@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "node": {
+    "id": "phenix-tools",
+    "description": "Verify the phenix-tools workspace",
+    "tags": ["tooling", "foundation"],
+    "when": {
+      "changed": {
+        "paths": ["crates/**", ".tend.json"]
+      }
+    },
+    "tasks": [
+      {
+        "id": "tend-crate-files",
+        "phase": "verify",
+        "kind": "filesExist",
+        "paths": [
+          "crates/tend/Cargo.toml",
+          "crates/tend/src/main.rs"
+        ]
+      }
+    ]
+  }
+}

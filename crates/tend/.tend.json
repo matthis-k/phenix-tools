@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "node": {
+    "id": "tend-dev",
+    "description": "Verify the tend crate itself",
+    "tags": ["tooling", "rust", "foundation"],
+    "when": {
+      "changed": {
+        "paths": ["**/*.rs", "Cargo.toml", ".tend.json"]
+      }
+    },
+    "tasks": [
+      {
+        "id": "crate-files-exist",
+        "phase": "verify",
+        "kind": "filesExist",
+        "paths": [
+          "Cargo.toml",
+          "src/main.rs"
+        ]
+      }
+    ]
+  }
+}
