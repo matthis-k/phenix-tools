@@ -9,14 +9,23 @@ pub struct SyncManager {
     pub base_dir: PathBuf,
     /// Workspace root (parent of nodes.json) for updating submodule pointers
     pub workspace: PathBuf,
+    /// Optional custom commit message override
+    pub commit_message: Option<String>,
 }
 
 impl SyncManager {
-    pub fn new(base_dir: &Path, workspace: &Path) -> Self {
+    pub fn new(base_dir: &Path, workspace: &Path, commit_message: Option<String>) -> Self {
         Self {
             base_dir: base_dir.to_path_buf(),
             workspace: workspace.to_path_buf(),
+            commit_message,
         }
+    }
+
+    fn commit_msg(&self, default: &str) -> String {
+        self.commit_message
+            .clone()
+            .unwrap_or_else(|| default.to_string())
     }
 
     pub fn read_nodes_file(path: &Path) -> Result<Vec<String>, String> {
@@ -116,22 +125,18 @@ impl SyncManager {
                     for input in &config.update_inputs {
                         println!("    updating input: {}", input);
                         self.nix_flake_update(&repo_path, input)?;
+
+                        if self.git_has_changes(&repo_path)? {
+                            let msg = self.commit_msg(&format!("update/sync: {}", input));
+                            println!("    committing: {}", msg);
+                            self.git_commit(&repo_path, &msg)?;
+                            self.git_push(&repo_path)?;
+                        }
                     }
 
                     for check in &config.checks {
                         println!("    check: {}", check);
                         self.run_check(&repo_path, check)?;
-                    }
-
-                    if self.git_has_changes(&repo_path)? {
-                        println!("    committing...");
-                        self.git_commit(
-                            &repo_path,
-                            &format!("sync: update inputs for {}", repo_name),
-                        )?;
-                        self.git_push(&repo_path)?;
-                    } else {
-                        println!("    no changes.");
                     }
                 }
 
@@ -169,8 +174,9 @@ impl SyncManager {
     fn update_workspace_submodules(&self) -> Result<(), String> {
         let ws = &self.workspace;
         if self.git_has_changes(ws)? {
-            println!("  [workspace] updating submodule pointers...");
-            self.git_commit(ws, "sync: update submodule pointers")?;
+            let msg = self.commit_msg("sync: update submodule pointers");
+            println!("  [workspace] {}", msg);
+            self.git_commit(ws, &msg)?;
             self.git_push(ws)?;
             println!("  [workspace] done.");
         } else {

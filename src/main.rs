@@ -26,6 +26,9 @@ enum Commands {
     Sync {
         /// Path to JSON nodes file listing entry point repos
         nodes: PathBuf,
+        /// Custom commit message (default: "update/sync: <input>")
+        #[arg(short, long)]
+        message: Option<String>,
         /// Dry run: print the plan without executing
         #[arg(long)]
         plan: bool,
@@ -40,8 +43,8 @@ fn main() {
             let mut cmd = Cli::command();
             generate(shell, &mut cmd, "phenix-tools", &mut std::io::stdout());
         }
-        Commands::Sync { nodes, plan } => {
-            if let Err(e) = run_sync(&nodes, plan) {
+        Commands::Sync { nodes, message, plan } => {
+            if let Err(e) = run_sync(&nodes, message, plan) {
                 eprintln!("error: {}", e);
                 std::process::exit(1);
             }
@@ -49,7 +52,7 @@ fn main() {
     }
 }
 
-fn run_sync(nodes_arg: &PathBuf, plan: bool) -> Result<(), String> {
+fn run_sync(nodes_arg: &PathBuf, message: Option<String>, plan: bool) -> Result<(), String> {
     let nodes_path = if nodes_arg.is_absolute() {
         nodes_arg.clone()
     } else {
@@ -87,7 +90,7 @@ fn run_sync(nodes_arg: &PathBuf, plan: bool) -> Result<(), String> {
         println!("  {}", ep);
     }
 
-    let manager = sync::SyncManager::new(base_dir, base_dir);
+    let manager = sync::SyncManager::new(base_dir, base_dir, message);
     let dag = manager.build_dag(&resolved)?;
 
     println!("\nDependency graph:");
