@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "node": {
+    "id": "tend-mcp",
+    "description": "Build and verify the tend-mcp MCP server",
+    "tags": ["tooling", "mcp", "rust"],
+    "when": {
+      "changed": {
+        "paths": ["**/*.rs", "Cargo.toml", ".tend.json"]
+      }
+    },
+    "tasks": [
+      {
+        "id": "tend-mcp-builds",
+        "phase": "verify",
+        "kind": "command",
+        "command": ["cargo", "build", "-p", "tend-mcp"]
+      }
+    ]
+  }
+}

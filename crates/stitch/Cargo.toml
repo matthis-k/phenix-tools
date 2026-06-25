@@ -1,0 +1,21 @@
+[package]
+name = "stitch"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "stitch"
+path = "src/main.rs"
+
+[lib]
+name = "stitch"
+path = "src/lib.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tend = { path = "../tend" }
+
+[dev-dependencies]
+tempfile = "3"
