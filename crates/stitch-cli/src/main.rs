@@ -1,10 +1,14 @@
+use std::collections::BTreeMap;
+
 use clap::{Parser, Subcommand};
 
 use stitch::changeset;
 use stitch::config;
 use stitch::git;
+use stitch::graph;
 use stitch::model;
 use stitch::status;
+use stitch::sync;
 
 fn main() {
     let cli = Cli::parse();
@@ -14,8 +18,12 @@ fn main() {
         Commands::Status { json, short, dirty_only, repo } => cmd_status(*json, *short, *dirty_only, repo.as_deref()),
         Commands::Diff { repo, staged, json } => cmd_diff(repo.as_deref(), *staged, *json),
         Commands::Dag { mode, split, json } => cmd_dag(mode.as_deref(), split.as_deref(), *json),
-        Commands::Commit { message, repo, messages, write_template, dry_run, no_tend, staged, apply } => {
-            cmd_commit(message.as_deref(), repo.as_deref(), messages.as_deref(), *write_template, *dry_run, *no_tend, *staged, *apply)
+        Commands::Commit { message, repo, messages, write_template, dry_run, no_tend, staged, apply, sync: sync_flag, plan, json: json_output, no_push, force, resume } => {
+            if *sync_flag || resume.is_some() {
+                cmd_sync_commit(*sync_flag, *plan, *dry_run, *json_output, *no_push, *force, resume.as_deref(), messages.as_deref())
+            } else {
+                cmd_commit(message.as_deref(), repo.as_deref(), messages.as_deref(), *write_template, *dry_run, *no_tend, *staged, *apply)
+            }
         },
         Commands::Changeset { command } => changeset::dispatch(command),
     };
@@ -84,6 +92,20 @@ enum Commands {
         staged: bool,
         #[arg(long, help = "Apply (required for actual commits)")]
         apply: bool,
+
+        // Sync flags
+        #[arg(long, help = "DAG-wide sync commit: commit changed nodes, update dependent flake inputs, validate, and push in dependency order")]
+        sync: bool,
+        #[arg(long, help = "Show the sync plan without executing (requires --sync)")]
+        plan: bool,
+        #[arg(long, help = "JSON output for agent usage (requires --sync)")]
+        json: bool,
+        #[arg(long, help = "Skip push phase after committing (requires --sync)")]
+        no_push: bool,
+        #[arg(long, help = "Allow edge cases like detached HEAD (requires --sync)")]
+        force: bool,
+        #[arg(long, help = "Resume a failed sync transaction (requires --sync)")]
+        resume: Option<String>,
     },
     /// Manage changesets (legacy)
     Changeset {
@@ -304,6 +326,70 @@ fn cmd_dag(mode: Option<&str>, split: Option<&str>, json: bool) -> Result<(), St
         }
         println!("Total: {} node(s)", nodes.len());
     }
+    Ok(())
+}
+
+fn cmd_sync_commit(
+    sync_flag: bool,
+    plan_mode: bool,
+    dry_run: bool,
+    json_output: bool,
+    no_push: bool,
+    force: bool,
+    resume_id: Option<&str>,
+    messages_path: Option<&str>,
+) -> Result<(), String> {
+    let cfg = config::find_and_load()?;
+
+    if let Some(tx_id) = resume_id {
+        let result = sync::resume_sync(tx_id, &cfg, no_push)?;
+        println!("{}", sync::format_result_output(&result, json_output));
+        return Ok(());
+    }
+
+    if !sync_flag {
+        return Err("Internal error: cmd_sync_commit called without --sync".to_string());
+    }
+
+    let dag = graph::discover_graph(&cfg)?;
+    let statuses = status::collect_all(&cfg)?;
+    let plan = sync::plan_sync(&dag, &statuses, &cfg)?;
+
+    if plan_mode || dry_run {
+        println!("{}", sync::format_plan_output(&plan, json_output));
+        return Ok(());
+    }
+
+    if !plan.blocked_reasons.is_empty() && !force {
+        println!("{}", sync::format_plan_output(&plan, json_output));
+        return Err("Sync blocked. Use --force to override or fix the issues.".to_string());
+    }
+
+    if plan.commit_order.is_empty() {
+        println!("Nothing to sync commit.");
+        return Ok(());
+    }
+
+    let messages: Option<BTreeMap<String, String>> = if let Some(path) = messages_path {
+        let content = std::fs::read_to_string(path).map_err(|e| format!("Read messages: {}", e))?;
+        let raw: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&content)
+            .map_err(|e| format!("Parse messages: {}", e))?;
+        let mut msgs = BTreeMap::new();
+        for (key, val) in raw {
+            let msg = val.get("subject").and_then(|v| v.as_str())
+                .unwrap_or(&key)
+                .to_string();
+            msgs.insert(key, msg);
+        }
+        Some(msgs)
+    } else {
+        None
+    };
+
+    let result = sync::execute_sync(&plan, &dag, &cfg, no_push, messages.as_ref(), force)?;
+
+    println!("{}", sync::format_result_output(&result, json_output));
+
     Ok(())
 }
 

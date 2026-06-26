@@ -55,7 +55,7 @@ pub fn get_status(repo_path: &Path) -> Result<RepoStatus, String> {
     })
 }
 
-fn git_branch(repo: &Path) -> Result<String, String> {
+pub fn git_branch(repo: &Path) -> Result<String, String> {
     let output = Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(repo)
@@ -179,6 +179,18 @@ pub fn has_merge_conflict_markers(repo: &Path) -> Result<bool, String> {
         .map_err(|e| format!("git grep conflict: {}", e))?;
     // Exit code 0 means found matches, 1 means none
     Ok(output.status.success())
+}
+
+pub fn git_remote(repo: &Path, name: &str) -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .args(["remote", "get-url", name])
+        .current_dir(repo)
+        .output()
+        .map_err(|e| format!("git remote get-url: {}", e))?;
+    if !output.status.success() {
+        return Err(format!("No remote '{}' in {}", name, repo.display()));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 pub fn is_mid_merge(repo: &Path) -> Result<bool, String> {

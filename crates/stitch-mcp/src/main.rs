@@ -38,6 +38,7 @@ fn main() {
     server.add_tool(Box::new(tools::StitchDagTool));
     server.add_tool(Box::new(tools::StitchCommitTemplateTool));
     server.add_tool(Box::new(tools::StitchCommitTool));
+    server.add_tool(Box::new(tools::StitchCommitSyncTool));
     server.add_tool(Box::new(tools::StitchSyncTool));
 
     server.add_resource(Box::new(resources::StitchWorkspaceResource));

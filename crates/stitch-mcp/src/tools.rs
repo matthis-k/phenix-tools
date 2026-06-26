@@ -1,9 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use phenix_mcp_core::mcp::{McpTool, ToolContext};
 use phenix_mcp_core::result::{ErrorKind, ToolFailure, ToolResult};
 use phenix_mcp_core::types::{MutationLevel, ToolMetadata};
 use serde_json::{json, Value};
+
+use stitch::graph;
+use stitch::sync;
 
 fn mk_err(kind: ErrorKind, msg: &str, audit_id: &str) -> ToolFailure {
     ToolFailure::new(kind, msg, audit_id)
@@ -476,6 +479,142 @@ impl McpTool for StitchCommitTool {
     }
 }
 
+pub struct StitchCommitSyncTool;
+
+impl McpTool for StitchCommitSyncTool {
+    fn name(&self) -> &str { "stitch.commit_sync" }
+    fn description(&self) -> &str { "Create DAG-wide synced commits. Commits changed nodes, updates dependent flake inputs, validates, and pushes in dependency order." }
+    fn metadata(&self) -> ToolMetadata { tool_meta(MutationLevel::CreatesCommit) }
+    fn input_schema(&self) -> Value {
+        json!({
+            "apply": { "type": "boolean", "description": "Must be true to execute" },
+            "dry_run": { "type": "boolean", "description": "Plan mode (no mutations)" },
+            "no_push": { "type": "boolean", "description": "Skip push phase after committing" },
+            "force": { "type": "boolean", "description": "Allow edge cases like detached HEAD" },
+            "messages": {
+                "type": "object",
+                "description": "Keyed by node name, each with subject, body",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                        "subject": { "type": "string" },
+                        "body": { "type": "string" }
+                    }
+                }
+            },
+            "resume": { "type": "string", "description": "Transaction ID to resume" }
+        })
+    }
+    fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolFailure> {
+        let audit_id = ctx.audit.generate_id();
+        let apply = input.get("apply").and_then(|v| v.as_bool()).unwrap_or(false);
+        let dry_run = input.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
+        let no_push = input.get("no_push").and_then(|v| v.as_bool()).unwrap_or(false);
+        let force = input.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+        let resume_id = input.get("resume").and_then(|v| v.as_str());
+
+        if !apply && !dry_run {
+            return Err(mk_err(ErrorKind::PolicyDenied, "Must set apply=true to execute, or use dry_run=true for plan-only", &audit_id));
+        }
+
+        let cfg = match stitch::config::find_and_load() {
+            Ok(c) => c,
+            Err(e) => return Err(mk_err(ErrorKind::NotFound, &format!("Config: {}", e), &audit_id)),
+        };
+
+        if let Some(tx_id) = resume_id {
+            let result = match sync::resume_sync(tx_id, &cfg, no_push) {
+                Ok(r) => r,
+                Err(e) => return Err(mk_err(ErrorKind::NotFound, &format!("Resume failed: {}", e), &audit_id)),
+            };
+            let out = ToolResult::ok(
+                json!({
+                    "transaction_id": result.transaction_id,
+                    "phase": result.phase.to_string(),
+                    "created_commits": result.created_commits,
+                    "push_results": result.push_results.iter().map(|(name, r)| {
+                        json!({"node": name, "success": r.is_ok(), "error": r.as_ref().err()})
+                    }).collect::<Vec<_>>()
+                }),
+                format!("Resumed transaction: {}", result.transaction_id),
+                &audit_id,
+            );
+            return Ok(serde_json::to_value(&out).unwrap_or_default());
+        }
+
+        match graph::discover_graph(&cfg) {
+            Ok(dag) => {
+                let statuses = stitch::status::collect_all(&cfg).unwrap_or_default();
+                match sync::plan_sync(&dag, &statuses, &cfg) {
+                    Ok(plan) => {
+                        if dry_run {
+                            let out = ToolResult::ok(
+                                json!({
+                                    "transaction_id": plan.transaction_id,
+                                    "root": plan.root,
+                                    "commit_order": plan.commit_order,
+                                    "push_order": plan.push_order,
+                                    "nodes": plan.node_plans.iter().map(|(id, np)| {
+                                        json!({
+                                            "name": id,
+                                            "dirty": np.dirty,
+                                            "commit_required": np.needs_code_commit,
+                                            "sync_update_required": np.needs_input_sync,
+                                            "message": np.message
+                                        })
+                                    }).collect::<Vec<_>>(),
+                                    "blocked_reasons": plan.blocked_reasons
+                                }),
+                                format!("Sync plan: {} node(s) to process", plan.commit_order.len()),
+                                &audit_id,
+                            );
+                            return Ok(serde_json::to_value(&out).unwrap_or_default());
+                        }
+
+                        if !plan.blocked_reasons.is_empty() && !force {
+                            return Err(mk_err(ErrorKind::Conflict,
+                                &format!("Sync blocked: {}. Use force=true to override", plan.blocked_reasons.join("; ")),
+                                &audit_id));
+                        }
+
+                        let messages: Option<BTreeMap<String, String>> = input.get("messages")
+                            .and_then(|v| v.as_object())
+                            .map(|obj| {
+                                obj.iter().map(|(k, v)| {
+                                    let msg = v.get("subject").and_then(|s| s.as_str()).unwrap_or(k);
+                                    (k.clone(), msg.to_string())
+                                }).collect()
+                            });
+
+                        match sync::execute_sync(&plan, &dag, &cfg, no_push, messages.as_ref(), force) {
+                            Ok(result) => {
+                                let out = ToolResult::ok(
+                                    json!({
+                                        "transaction_id": result.transaction_id,
+                                        "phase": result.phase.to_string(),
+                                        "created_commits": result.created_commits,
+                                        "push_results": result.push_results.iter().map(|(name, r)| {
+                                            json!({"node": name, "success": r.is_ok(), "error": r.as_ref().err()})
+                                        }).collect::<Vec<_>>()
+                                    }),
+                                    format!("Sync commit {}: {} node(s) committed",
+                                        if result.phase == sync::JournalPhase::Completed { "completed" } else { "partial" },
+                                        result.created_commits.len()),
+                                    &audit_id,
+                                );
+                                Ok(serde_json::to_value(&out).unwrap_or_default())
+                            }
+                            Err(e) => Err(mk_err(ErrorKind::Internal, &format!("Sync execution failed: {}", e), &audit_id)),
+                        }
+                    }
+                    Err(e) => Err(mk_err(ErrorKind::Internal, &format!("Plan failed: {}", e), &audit_id)),
+                }
+            }
+            Err(e) => Err(mk_err(ErrorKind::NotFound, &format!("Graph discovery: {}", e), &audit_id)),
+        }
+    }
+}
+
 pub struct StitchSyncTool;
 
 impl McpTool for StitchSyncTool {
@@ -506,7 +645,7 @@ impl McpTool for StitchSyncTool {
 
         let result = ToolResult::ok(
             json!({ "completed": [], "failed": [] }),
-            "Sync operations require multi-repo remote coordination — implement per-command flow for pull/push",
+            "Use stitch.commit_sync for DAG sync commit operations. This tool is for pull/rebase flows.",
             &audit_id,
         );
         Ok(serde_json::to_value(&result).unwrap_or_default())
