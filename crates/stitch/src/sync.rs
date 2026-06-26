@@ -9,17 +9,17 @@ use crate::graph::{FlakeNode, WorkspaceGraph, NodeId};
 use crate::model::{RepoAvailability, RepoStatus, WorkspaceConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncCommitPlan {
+pub struct ActionPlan {
     pub transaction_id: String,
     pub root: NodeId,
     pub affected_nodes: BTreeSet<NodeId>,
-    pub actions: Vec<SyncAction>,
+    pub actions: Vec<Action>,
     pub node_plans: BTreeMap<NodeId, NodeCommitPlan>,
     pub blocked_reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SyncAction {
+pub enum Action {
     Commit {
         node: NodeId,
         message: String,
@@ -37,7 +37,7 @@ pub enum SyncAction {
     },
 }
 
-impl SyncAction {
+impl Action {
     pub fn node(&self) -> &NodeId {
         match self {
             Self::Commit { node, .. } => node,
@@ -167,7 +167,16 @@ pub fn plan_sync(
     graph: &WorkspaceGraph,
     statuses: &[RepoStatus],
     _cfg: &WorkspaceConfig,
-) -> Result<SyncCommitPlan, String> {
+) -> Result<ActionPlan, String> {
+    plan_commit(graph, statuses, _cfg, true)
+}
+
+pub fn plan_commit(
+    graph: &WorkspaceGraph,
+    statuses: &[RepoStatus],
+    _cfg: &WorkspaceConfig,
+    include_push: bool,
+) -> Result<ActionPlan, String> {
     let mut blocked_reasons = Vec::new();
     let transaction_id = generate_transaction_id();
     let topo_order = graph.topological_order()?;
@@ -265,20 +274,20 @@ pub fn plan_sync(
     //   1. Commit + UpdateInputs for each affected node (topo order)
     //   2. Validate each affected node
     //   3. Push each affected node
-    let mut actions: Vec<SyncAction> = Vec::new();
+    let mut actions: Vec<Action> = Vec::new();
     for node_id in topo_order.iter().filter(|id| affected_nodes.contains(*id)) {
         let plan = match node_plans.get(node_id) {
             Some(p) => p,
             None => continue,
         };
         if plan.needs_code_commit {
-            actions.push(SyncAction::Commit {
+            actions.push(Action::Commit {
                 node: node_id.clone(),
                 message: plan.message.clone(),
             });
         }
         if plan.needs_input_sync {
-            actions.push(SyncAction::UpdateInputs {
+            actions.push(Action::UpdateInputs {
                 node: node_id.clone(),
                 updates: plan.dependencies_to_update.clone(),
                 message: plan.message.clone(),
@@ -286,17 +295,19 @@ pub fn plan_sync(
         }
     }
     for node_id in topo_order.iter().filter(|id| affected_nodes.contains(*id)) {
-        actions.push(SyncAction::Validate {
+        actions.push(Action::Validate {
             node: node_id.clone(),
         });
     }
-    for node_id in topo_order.iter().filter(|id| affected_nodes.contains(*id)) {
-        actions.push(SyncAction::Push {
-            node: node_id.clone(),
-        });
+    if include_push {
+        for node_id in topo_order.iter().filter(|id| affected_nodes.contains(*id)) {
+            actions.push(Action::Push {
+                node: node_id.clone(),
+            });
+        }
     }
 
-    Ok(SyncCommitPlan {
+    Ok(ActionPlan {
         transaction_id,
         root: graph.root.clone(),
         affected_nodes,
@@ -345,7 +356,7 @@ fn shlex_split(cmd: &str) -> Vec<String> {
     args
 }
 
-pub struct SyncExecutionResult {
+pub struct ActionResult {
     pub transaction_id: String,
     pub created_commits: BTreeMap<String, String>,
     pub push_results: BTreeMap<String, Result<(), String>>,
@@ -353,13 +364,24 @@ pub struct SyncExecutionResult {
 }
 
 pub fn execute_sync(
-    plan: &SyncCommitPlan,
+    plan: &ActionPlan,
     graph: &WorkspaceGraph,
     cfg: &WorkspaceConfig,
     no_push: bool,
     messages: Option<&BTreeMap<String, String>>,
     force: bool,
-) -> Result<SyncExecutionResult, String> {
+) -> Result<ActionResult, String> {
+    execute_plan(plan, graph, cfg, no_push, messages, force)
+}
+
+fn execute_plan(
+    plan: &ActionPlan,
+    graph: &WorkspaceGraph,
+    cfg: &WorkspaceConfig,
+    no_push: bool,
+    messages: Option<&BTreeMap<String, String>>,
+    force: bool,
+) -> Result<ActionResult, String> {
     let mut journal = TransactionJournal {
         transaction_id: plan.transaction_id.clone(),
         started_at: timestamp_now(),
@@ -398,7 +420,7 @@ pub fn execute_sync(
 
     for action in &plan.actions {
         match action {
-            SyncAction::Commit { node: node_id, message } => {
+            Action::Commit { node: node_id, message } => {
                 let node = match graph.get_node(node_id) {
                     Some(n) => n,
                     None => continue,
@@ -425,7 +447,7 @@ pub fn execute_sync(
                 }
                 write_journal(&journal, cfg)?;
             }
-            SyncAction::UpdateInputs { node: node_id, updates, message } => {
+            Action::UpdateInputs { node: node_id, updates, message } => {
                 let node = match graph.get_node(node_id) {
                     Some(n) => n,
                     None => continue,
@@ -471,7 +493,7 @@ pub fn execute_sync(
                     write_journal(&journal, cfg)?;
                 }
             }
-            SyncAction::Validate { node: node_id } => {
+            Action::Validate { node: node_id } => {
                 let plan_node = match plan.node_plans.get(node_id) {
                     Some(p) => p,
                     None => continue,
@@ -523,7 +545,7 @@ pub fn execute_sync(
                     }
                 }
             }
-            SyncAction::Push { node: node_id } => {
+            Action::Push { node: node_id } => {
                 if no_push {
                     continue;
                 }
@@ -566,7 +588,7 @@ pub fn execute_sync(
     journal.phase = JournalPhase::Completed;
     write_journal(&journal, cfg)?;
 
-    Ok(SyncExecutionResult {
+    Ok(ActionResult {
         transaction_id: plan.transaction_id.clone(),
         created_commits: commit_shas,
         push_results,
@@ -760,7 +782,7 @@ pub fn resume_sync(
     transaction_id: &str,
     cfg: &WorkspaceConfig,
     no_push: bool,
-) -> Result<SyncExecutionResult, String> {
+) -> Result<ActionResult, String> {
     let journal = load_journal(transaction_id, cfg)?
         .ok_or_else(|| format!("Transaction '{}' not found", transaction_id))?;
 
@@ -773,7 +795,7 @@ pub fn resume_sync(
         let mut push_results: BTreeMap<String, Result<(), String>> = BTreeMap::new();
         let mut any_failed = false;
         for action in &plan.actions {
-            let SyncAction::Push { node: node_id } = action else { continue };
+            let Action::Push { node: node_id } = action else { continue };
             let entry = match journal.nodes.get(node_id) {
                 Some(e) => e,
                 None => continue,
@@ -802,7 +824,7 @@ pub fn resume_sync(
         }
 
         if any_failed {
-            return Ok(SyncExecutionResult {
+            return Ok(ActionResult {
                 transaction_id: transaction_id.to_string(),
                 created_commits: journal.nodes.iter().filter_map(|(id, e)| {
                     e.commit_sha.clone().map(|sha| (id.clone(), sha))
@@ -812,7 +834,7 @@ pub fn resume_sync(
             });
         }
 
-        return Ok(SyncExecutionResult {
+        return Ok(ActionResult {
             transaction_id: transaction_id.to_string(),
             created_commits: journal.nodes.iter().filter_map(|(id, e)| {
                 e.commit_sha.clone().map(|sha| (id.clone(), sha))
@@ -861,13 +883,13 @@ fn load_journal(transaction_id: &str, cfg: &WorkspaceConfig) -> Result<Option<Tr
     Ok(Some(journal))
 }
 
-pub fn format_plan_output(plan: &SyncCommitPlan, json_output: bool) -> String {
+pub fn format_plan_output(plan: &ActionPlan, json_output: bool) -> String {
     if json_output {
         let action_list: Vec<serde_json::Value> = plan.actions.iter().map(|a| match a {
-            SyncAction::Commit { node, .. } => serde_json::json!({ "type": "commit", "node": node }),
-            SyncAction::UpdateInputs { node, .. } => serde_json::json!({ "type": "update-inputs", "node": node }),
-            SyncAction::Validate { node } => serde_json::json!({ "type": "validate", "node": node }),
-            SyncAction::Push { node } => serde_json::json!({ "type": "push", "node": node }),
+            Action::Commit { node, .. } => serde_json::json!({ "type": "commit", "node": node }),
+            Action::UpdateInputs { node, .. } => serde_json::json!({ "type": "update-inputs", "node": node }),
+            Action::Validate { node } => serde_json::json!({ "type": "validate", "node": node }),
+            Action::Push { node } => serde_json::json!({ "type": "push", "node": node }),
         }).collect();
 
         return serde_json::to_string_pretty(&serde_json::json!({
@@ -904,20 +926,20 @@ pub fn format_plan_output(plan: &SyncCommitPlan, json_output: bool) -> String {
     output.push_str("Action plan:\n");
     for (i, action) in plan.actions.iter().enumerate() {
         match action {
-            SyncAction::Commit { node, message } => {
+            Action::Commit { node, message } => {
                 output.push_str(&format!("  {}. {}: commit\n", i + 1, node));
                 output.push_str(&format!("       message: {}\n", message));
             }
-            SyncAction::UpdateInputs { node, updates, .. } => {
+            Action::UpdateInputs { node, updates, .. } => {
                 output.push_str(&format!("  {}. {}: update-inputs\n", i + 1, node));
                 for u in updates {
                     output.push_str(&format!("       {} -> {}\n", u.input_name, u.dependency_node));
                 }
             }
-            SyncAction::Validate { node } => {
+            Action::Validate { node } => {
                 output.push_str(&format!("  {}. {}: validate\n", i + 1, node));
             }
-            SyncAction::Push { node } => {
+            Action::Push { node } => {
                 output.push_str(&format!("  {}. {}: push\n", i + 1, node));
             }
         }
@@ -926,7 +948,7 @@ pub fn format_plan_output(plan: &SyncCommitPlan, json_output: bool) -> String {
     output
 }
 
-pub fn format_result_output(result: &SyncExecutionResult, json_output: bool) -> String {
+pub fn format_result_output(result: &ActionResult, json_output: bool) -> String {
     if json_output {
         return serde_json::to_string_pretty(&serde_json::json!({
             "decision": match result.phase {
@@ -1020,7 +1042,7 @@ mod tests {
         }
     }
 
-    fn action_nodes(plan: &SyncCommitPlan) -> Vec<String> {
+    fn action_nodes(plan: &ActionPlan) -> Vec<String> {
         plan.actions.iter().map(|a| a.node().clone()).collect()
     }
 
@@ -1042,15 +1064,15 @@ mod tests {
         assert!(!root.needs_code_commit);
         assert!(root.needs_input_sync);
         // Check action types
-        assert!(matches!(plan.actions[0], SyncAction::Commit { .. }));
-        assert!(matches!(plan.actions[1], SyncAction::UpdateInputs { .. }));
-        assert!(matches!(plan.actions[2], SyncAction::UpdateInputs { .. }));
-        assert!(matches!(plan.actions[3], SyncAction::Validate { .. }));
-        assert!(matches!(plan.actions[4], SyncAction::Validate { .. }));
-        assert!(matches!(plan.actions[5], SyncAction::Validate { .. }));
-        assert!(matches!(plan.actions[6], SyncAction::Push { .. }));
-        assert!(matches!(plan.actions[7], SyncAction::Push { .. }));
-        assert!(matches!(plan.actions[8], SyncAction::Push { .. }));
+        assert!(matches!(plan.actions[0], Action::Commit { .. }));
+        assert!(matches!(plan.actions[1], Action::UpdateInputs { .. }));
+        assert!(matches!(plan.actions[2], Action::UpdateInputs { .. }));
+        assert!(matches!(plan.actions[3], Action::Validate { .. }));
+        assert!(matches!(plan.actions[4], Action::Validate { .. }));
+        assert!(matches!(plan.actions[5], Action::Validate { .. }));
+        assert!(matches!(plan.actions[6], Action::Push { .. }));
+        assert!(matches!(plan.actions[7], Action::Push { .. }));
+        assert!(matches!(plan.actions[8], Action::Push { .. }));
     }
 
     #[test]
@@ -1119,10 +1141,10 @@ mod tests {
         let plan = plan_sync(&graph, &statuses, &cfg).unwrap();
         // Push actions should be last, one per affected node in the same order
         let commit_nodes: Vec<&str> = plan.actions.iter().filter_map(|a| {
-            if matches!(a, SyncAction::Commit { .. }) { Some(a.node().as_str()) } else { None }
+            if matches!(a, Action::Commit { .. }) { Some(a.node().as_str()) } else { None }
         }).collect();
         let push_nodes: Vec<&str> = plan.actions.iter().filter_map(|a| {
-            if matches!(a, SyncAction::Push { .. }) { Some(a.node().as_str()) } else { None }
+            if matches!(a, Action::Push { .. }) { Some(a.node().as_str()) } else { None }
         }).collect();
         assert_eq!(commit_nodes, push_nodes);
     }

@@ -413,10 +413,10 @@ impl McpTool for StitchCommitTool {
                     Ok(plan) => {
                         if dry_run {
                             let action_list: Vec<serde_json::Value> = plan.actions.iter().map(|a| match a {
-                                sync::SyncAction::Commit { node, .. } => json!({"type": "commit", "node": node}),
-                                sync::SyncAction::UpdateInputs { node, .. } => json!({"type": "update-inputs", "node": node}),
-                                sync::SyncAction::Validate { node } => json!({"type": "validate", "node": node}),
-                                sync::SyncAction::Push { node } => json!({"type": "push", "node": node}),
+                                sync::Action::Commit { node, .. } => json!({"type": "commit", "node": node}),
+                                sync::Action::UpdateInputs { node, .. } => json!({"type": "update-inputs", "node": node}),
+                                sync::Action::Validate { node } => json!({"type": "validate", "node": node}),
+                                sync::Action::Push { node } => json!({"type": "push", "node": node}),
                             }).collect();
                             let out = ToolResult::ok(
                                 json!({
