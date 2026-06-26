@@ -35,7 +35,7 @@ pub fn run(step: &Step, workdir: &Path, env: Option<&HashMap<String, String>>) -
     let expected = step.expect.as_ref().and_then(|e| e.status).unwrap_or(0);
 
     if status == expected {
-        CheckResult::pass()
+        CheckResult::pass_with(stdout, stderr)
     } else {
         CheckResult {
             passed: false,

@@ -18,10 +18,12 @@ fn main() {
         Commands::Diff { repo, staged, json } => cmd_diff(repo.as_deref(), *staged, *json),
         Commands::Dag { mode, split, json } => cmd_dag(mode.as_deref(), split.as_deref(), *json),
         Commands::Commit { plan, dry_run, json: json_output, apply, no_push, force, resume, messages, message, repo, write_template, no_tend, staged } => {
-            if resume.is_some() || *apply || *plan || *dry_run || *no_push || *force || messages.is_some() || *write_template {
-                cmd_sync_commit(*plan, *dry_run, *json_output, *apply, *no_push, *force, resume.as_deref(), messages.as_deref())
+            if *write_template {
+                cmd_commit(message.as_deref(), repo.as_deref(), messages.as_deref(), true, *dry_run, *no_tend, *staged, *apply)
             } else if message.is_some() || repo.is_some() || *no_tend || *staged {
-                cmd_commit(message.as_deref(), repo.as_deref(), messages.as_deref(), *write_template, *dry_run, *no_tend, *staged, *apply)
+                cmd_commit(message.as_deref(), repo.as_deref(), messages.as_deref(), false, *dry_run, *no_tend, *staged, *apply)
+            } else if resume.is_some() || *apply || *plan || *dry_run || *no_push || *force || messages.is_some() {
+                cmd_sync_commit(*plan, *dry_run, *json_output, *apply, *no_push, *force, resume.as_deref(), messages.as_deref())
             } else {
                 cmd_sync_commit(*plan, *dry_run, *json_output, *apply, *no_push, *force, resume.as_deref(), messages.as_deref())
             }

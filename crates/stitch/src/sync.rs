@@ -146,7 +146,7 @@ pub fn plan_sync(
 
     let dirty_nodes: BTreeSet<NodeId> = statuses
         .iter()
-        .filter(|s| s.staged_count > 0 || s.unstaged_count > 0)
+        .filter(|s| s.staged_count > 0 || s.unstaged_count > 0 || s.untracked_count > 0)
         .map(|s| s.name.clone())
         .collect();
 
@@ -382,8 +382,8 @@ pub fn execute_sync(
             .collect();
 
         if plan_node.needs_code_commit {
-            let diff = git::git_diff_names(&node.path)?;
-            if diff.is_empty() {
+            let files = collect_all_changed_files(&node.path)?;
+            if files.is_empty() {
                 return Err(format!("{} marked dirty but no changes found", node.name));
             }
 
@@ -392,7 +392,7 @@ pub fn execute_sync(
                 .cloned()
                 .unwrap_or_else(|| plan_node.message.clone());
 
-            git::git_add(&node.path, &diff)?;
+            git::git_add(&node.path, &files)?;
             let trailed = crate::model::add_trailers(&msg, &plan.transaction_id, &cfg.workspace);
             git::git_commit(&node.path, &trailed)?;
             let sha = git::git_head(&node.path)?;
@@ -564,6 +564,13 @@ fn collect_all_changed_files(repo: &Path) -> Result<Vec<String>, String> {
     let mut files: Vec<String> = Vec::new();
     if let Ok(diff) = git::git_diff_names(repo) {
         for f in diff {
+            if !files.contains(&f) {
+                files.push(f);
+            }
+        }
+    }
+    if let Ok(staged) = git::git_diff_cached_names(repo) {
+        for f in staged {
             if !files.contains(&f) {
                 files.push(f);
             }

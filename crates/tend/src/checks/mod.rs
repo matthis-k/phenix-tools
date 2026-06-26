@@ -11,14 +11,18 @@ pub struct CheckResult {
 }
 
 impl CheckResult {
-    pub fn pass() -> Self {
+    pub fn pass_with(stdout: String, stderr: String) -> Self {
         Self {
             passed: true,
             skipped: false,
             reason: String::new(),
-            stdout: String::new(),
-            stderr: String::new(),
+            stdout,
+            stderr,
         }
+    }
+
+    pub fn pass() -> Self {
+        Self::pass_with(String::new(), String::new())
     }
 
     pub fn fail(reason: impl Into<String>) -> Self {

@@ -46,6 +46,13 @@ enum Commands {
         json: bool,
         files: Vec<String>,
     },
+    /// Run tasks with explicit phase and mode (agent-friendly)
+    Run {
+        #[arg(long, default_value = "verify")]
+        phase: String,
+        #[arg(long, default_value = "changed")]
+        mode: String,
+    },
     /// Run non-mutating verification tasks
     Verify {
         #[command(subcommand)]
@@ -97,6 +104,7 @@ fn main() {
         Commands::Plan { mode, group, target, base: _, json, files } => {
             cmd_plan(&root, configs.as_deref(), &mode, group.as_deref(), target.as_deref(), &files, json)
         },
+        Commands::Run { phase, mode } => cmd_run(&root, configs.as_deref(), &phase, &mode),
         Commands::Verify { mode } => cmd_verify(&root, configs.as_deref(), &mode),
         Commands::Fix { mode } => cmd_fix(&root, configs.as_deref(), &mode),
         Commands::Generate { mode } => cmd_generate(&root, configs.as_deref(), &mode),
