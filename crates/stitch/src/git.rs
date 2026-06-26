@@ -291,36 +291,42 @@ pub fn parse_porcelain(porcelain: &str) -> Vec<GitChange> {
 
     let mut changes = Vec::new();
     for line in porcelain.lines() {
-        let line = line.trim();
-        if line.is_empty() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
             continue;
         }
 
-        let (flags, path_part) = if line.len() >= 3 {
-            let (f, p) = line.split_at(2);
-            (f, p.trim())
-        } else if line.len() == 2 {
-            (line, "")
-        } else {
+        // Only trim trailing whitespace to preserve leading space in XY status columns
+        let line = line.trim_end();
+        if line.len() < 2 {
             continue;
-        };
+        }
 
-        let chars: Vec<char> = flags.chars().collect();
-        let (x, y) = if chars.len() >= 2 { (chars[0], chars[1]) } else { (' ', ' ') };
+        let flags = &line[..2];
+        let path_section = if line.len() > 3 { &line[3..] } else { "" };
 
         if flags == "!!" {
             continue;
         }
 
+        let chars: Vec<char> = flags.chars().collect();
+        let (x, y) = (chars[0], chars[1]);
+
         let (path, old_path) = if x == 'R' || x == 'C' {
-            let parts: Vec<&str> = path_part.split('\0').collect();
-            if parts.len() >= 2 {
-                (parts[1].to_string(), Some(parts[0].to_string()))
+            // Support both NUL-separated (-z) format and arrow format
+            if let Some(nul_idx) = path_section.find('\0') {
+                let old = &path_section[..nul_idx];
+                let new = &path_section[nul_idx + 1..];
+                (new.to_string(), Some(old.to_string()))
+            } else if let Some(arrow_idx) = path_section.find(" -> ") {
+                let old = &path_section[..arrow_idx];
+                let new = &path_section[arrow_idx + 4..];
+                (new.to_string(), Some(old.to_string()))
             } else {
-                (path_part.to_string(), None)
+                (path_section.to_string(), None)
             }
         } else {
-            (path_part.to_string(), None)
+            (path_section.to_string(), None)
         };
 
         changes.push(GitChange {
@@ -459,5 +465,68 @@ mod tests {
         let changes = parse_porcelain(input);
         assert!(changes.iter().all(|c| c.is_untracked()));
         assert_eq!(changes.len(), 2);
+    }
+
+    #[test]
+    fn parse_porcelain_worktree_modified_preserves_leading_space() {
+        let input = " M modified.rs\n";
+        let (staged, unstaged, untracked) = count_porcelain(input);
+        assert_eq!(staged, 0, "expected 0 staged");
+        assert_eq!(unstaged, 1, "expected 1 unstaged");
+        assert_eq!(untracked, 0, "expected 0 untracked");
+    }
+
+    #[test]
+    fn parse_porcelain_staged_modified() {
+        let input = "M  modified.rs\n";
+        let (staged, unstaged, untracked) = count_porcelain(input);
+        assert_eq!(staged, 1, "expected 1 staged");
+        assert_eq!(unstaged, 0, "expected 0 unstaged");
+        assert_eq!(untracked, 0, "expected 0 untracked");
+    }
+
+    #[test]
+    fn parse_porcelain_staged_and_unstaged_same_file() {
+        let input = "MM modified.rs\n";
+        let (staged, unstaged, untracked) = count_porcelain(input);
+        assert_eq!(staged, 1, "expected 1 staged");
+        assert_eq!(unstaged, 1, "expected 1 unstaged");
+        assert_eq!(untracked, 0, "expected 0 untracked");
+    }
+
+    #[test]
+    fn parse_porcelain_untracked() {
+        let input = "?? new.rs\n";
+        let (staged, unstaged, untracked) = count_porcelain(input);
+        assert_eq!(staged, 0, "expected 0 staged");
+        assert_eq!(unstaged, 0, "expected 0 unstaged");
+        assert_eq!(untracked, 1, "expected 1 untracked");
+    }
+
+    #[test]
+    fn parse_porcelain_ignored_skipped() {
+        let input = "!! target/\n";
+        let changes = parse_porcelain(input);
+        assert_eq!(changes.len(), 0, "ignored entries should be skipped");
+    }
+
+    #[test]
+    fn parse_porcelain_rename_arrow_format() {
+        let input = "R  old.rs -> new.rs\n";
+        let changes = parse_porcelain(input);
+        assert_eq!(changes.len(), 1, "expected 1 change");
+        assert_eq!(changes[0].path, "new.rs");
+        assert_eq!(changes[0].old_path.as_deref(), Some("old.rs"));
+        assert!(changes[0].is_staged(), "rename should be staged");
+    }
+
+    #[test]
+    fn parse_porcelain_copy_arrow_format() {
+        let input = "C  old.rs -> new.rs\n";
+        let changes = parse_porcelain(input);
+        assert_eq!(changes.len(), 1, "expected 1 change");
+        assert_eq!(changes[0].path, "new.rs");
+        assert_eq!(changes[0].old_path.as_deref(), Some("old.rs"));
+        assert!(changes[0].is_staged(), "copy should be staged");
     }
 }

@@ -20,6 +20,20 @@
           "crates/tend-cli/Cargo.toml",
           "crates/tend-cli/src/main.rs"
         ]
+      },
+      {
+        "id": "cargo-check",
+        "phase": "verify",
+        "kind": "command",
+        "command": ["cargo", "check", "--quiet", "--workspace", "--all-targets"],
+        "description": "Check that the workspace compiles cleanly"
+      },
+      {
+        "id": "cargo-clippy",
+        "phase": "verify",
+        "kind": "command",
+        "command": ["cargo", "clippy", "--quiet", "--workspace", "--all-targets", "--", "-D", "warnings"],
+        "description": "Run clippy with deny-warnings on workspace"
       }
     ]
   }
