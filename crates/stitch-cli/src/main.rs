@@ -545,7 +545,7 @@ fn cmd_sync_commit(
         return Err("Sync blocked. Use --force to override or fix the issues.".to_string());
     }
 
-    if plan.commit_order.is_empty() {
+    if plan.actions.is_empty() {
         println!("Nothing to sync commit.");
         return Ok(());
     }

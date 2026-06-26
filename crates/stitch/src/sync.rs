@@ -13,10 +13,39 @@ pub struct SyncCommitPlan {
     pub transaction_id: String,
     pub root: NodeId,
     pub affected_nodes: BTreeSet<NodeId>,
-    pub commit_order: Vec<NodeId>,
-    pub push_order: Vec<NodeId>,
+    pub actions: Vec<SyncAction>,
     pub node_plans: BTreeMap<NodeId, NodeCommitPlan>,
     pub blocked_reasons: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SyncAction {
+    Commit {
+        node: NodeId,
+        message: String,
+    },
+    UpdateInputs {
+        node: NodeId,
+        updates: Vec<InputUpdate>,
+        message: String,
+    },
+    Validate {
+        node: NodeId,
+    },
+    Push {
+        node: NodeId,
+    },
+}
+
+impl SyncAction {
+    pub fn node(&self) -> &NodeId {
+        match self {
+            Self::Commit { node, .. } => node,
+            Self::UpdateInputs { node, .. } => node,
+            Self::Validate { node } => node,
+            Self::Push { node } => node,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,8 +170,7 @@ pub fn plan_sync(
 ) -> Result<SyncCommitPlan, String> {
     let mut blocked_reasons = Vec::new();
     let transaction_id = generate_transaction_id();
-    let commit_order = graph.topological_order()?;
-    let push_order = commit_order.clone();
+    let topo_order = graph.topological_order()?;
 
     let dirty_nodes: BTreeSet<NodeId> = statuses
         .iter()
@@ -153,7 +181,7 @@ pub fn plan_sync(
     let mut affected_nodes: BTreeSet<NodeId> = dirty_nodes.clone();
     let mut plan_nodes: BTreeMap<NodeId, NodeCommitPlan> = BTreeMap::new();
 
-    for node_id in &commit_order {
+    for node_id in &topo_order {
         let is_dirty = dirty_nodes.contains(node_id);
         let node = match graph.get_node(node_id) {
             Some(n) => n,
@@ -210,7 +238,7 @@ pub fn plan_sync(
         );
     }
 
-    for node_id in &commit_order {
+    for node_id in &topo_order {
         let node = match graph.get_node(node_id) {
             Some(n) => n,
             None => continue,
@@ -233,22 +261,46 @@ pub fn plan_sync(
         .filter(|(id, _)| affected_nodes.contains(id))
         .collect();
 
-    let filtered_commit_order: Vec<NodeId> = commit_order
-        .into_iter()
-        .filter(|id| affected_nodes.contains(id))
-        .collect();
-
-    let filtered_push_order: Vec<NodeId> = push_order
-        .into_iter()
-        .filter(|id| affected_nodes.contains(id))
-        .collect();
+    // Build flat action list in DAG order:
+    //   1. Commit + UpdateInputs for each affected node (topo order)
+    //   2. Validate each affected node
+    //   3. Push each affected node
+    let mut actions: Vec<SyncAction> = Vec::new();
+    for node_id in topo_order.iter().filter(|id| affected_nodes.contains(*id)) {
+        let plan = match node_plans.get(node_id) {
+            Some(p) => p,
+            None => continue,
+        };
+        if plan.needs_code_commit {
+            actions.push(SyncAction::Commit {
+                node: node_id.clone(),
+                message: plan.message.clone(),
+            });
+        }
+        if plan.needs_input_sync {
+            actions.push(SyncAction::UpdateInputs {
+                node: node_id.clone(),
+                updates: plan.dependencies_to_update.clone(),
+                message: plan.message.clone(),
+            });
+        }
+    }
+    for node_id in topo_order.iter().filter(|id| affected_nodes.contains(*id)) {
+        actions.push(SyncAction::Validate {
+            node: node_id.clone(),
+        });
+    }
+    for node_id in topo_order.iter().filter(|id| affected_nodes.contains(*id)) {
+        actions.push(SyncAction::Push {
+            node: node_id.clone(),
+        });
+    }
 
     Ok(SyncCommitPlan {
         transaction_id,
         root: graph.root.clone(),
         affected_nodes,
-        commit_order: filtered_commit_order,
-        push_order: filtered_push_order,
+        actions,
         node_plans,
         blocked_reasons,
     })
@@ -316,16 +368,19 @@ pub fn execute_sync(
         nodes: BTreeMap::new(),
     };
 
-    for node_id in &plan.commit_order {
-        let node = graph.get_node(node_id).ok_or_else(|| format!("Node '{}' not found", node_id))?;
-        journal.nodes.insert(
-            node_id.clone(),
-            NodeJournalEntry {
-                path: node.path.to_string_lossy().to_string(),
-                commit_sha: None,
-                pushed: false,
-            },
-        );
+    for action in &plan.actions {
+        let node_id = action.node();
+        if !journal.nodes.contains_key(node_id) {
+            let node = graph.get_node(node_id).ok_or_else(|| format!("Node '{}' not found", node_id))?;
+            journal.nodes.insert(
+                node_id.clone(),
+                NodeJournalEntry {
+                    path: node.path.to_string_lossy().to_string(),
+                    commit_sha: None,
+                    pushed: false,
+                },
+            );
+        }
     }
 
     write_journal(&journal, cfg)?;
@@ -338,86 +393,28 @@ pub fn execute_sync(
         }
     }
 
-    for node_id in &plan.commit_order {
-        let plan_node = plan.node_plans.get(node_id).ok_or_else(|| format!("No plan for node '{}'", node_id))?;
-        if !plan_node.needs_code_commit && !plan_node.needs_input_sync {
-            continue;
-        }
-        let node = graph.get_node(node_id).ok_or_else(|| format!("Node '{}' not found", node_id))?;
-        let porcelain = git::git_porcelain(&node.path)?;
-        for line in porcelain.lines() {
-            if line.starts_with("?? ") {
-                // Untracked files exist - warn but don't block
-            }
-        }
-    }
-
     let mut commit_shas: BTreeMap<NodeId, String> = BTreeMap::new();
+    let mut push_results: BTreeMap<String, Result<(), String>> = BTreeMap::new();
 
-    journal.phase = JournalPhase::Committed;
-    write_journal(&journal, cfg)?;
+    for action in &plan.actions {
+        match action {
+            SyncAction::Commit { node: node_id, message } => {
+                let node = match graph.get_node(node_id) {
+                    Some(n) => n,
+                    None => continue,
+                };
 
-    for node_id in &plan.commit_order {
-        let plan_node = match plan.node_plans.get(node_id) {
-            Some(p) => p,
-            None => continue,
-        };
-
-        let node = match graph.get_node(node_id) {
-            Some(n) => n,
-            None => continue,
-        };
-
-        let updated_deps: Vec<InputUpdate> = plan_node
-            .dependencies_to_update
-            .iter()
-            .map(|u| {
-                let rev = commit_shas.get(&u.dependency_node).cloned();
-                InputUpdate {
-                    input_name: u.input_name.clone(),
-                    dependency_node: u.dependency_node.clone(),
-                    target_rev: rev,
+                let files = collect_all_changed_files(&node.path)?;
+                if files.is_empty() {
+                    return Err(format!("{} marked dirty but no changes found", node.name));
                 }
-            })
-            .collect();
 
-        if plan_node.needs_code_commit {
-            let files = collect_all_changed_files(&node.path)?;
-            if files.is_empty() {
-                return Err(format!("{} marked dirty but no changes found", node.name));
-            }
-
-            let msg = messages
-                .and_then(|m| m.get(node_id))
-                .cloned()
-                .unwrap_or_else(|| plan_node.message.clone());
-
-            git::git_add(&node.path, &files)?;
-            let trailed = crate::model::add_trailers(&msg, &plan.transaction_id, &cfg.workspace);
-            git::git_commit(&node.path, &trailed)?;
-            let sha = git::git_head(&node.path)?;
-            commit_shas.insert(node_id.clone(), sha.clone());
-
-            if let Some(entry) = journal.nodes.get_mut(node_id) {
-                entry.commit_sha = Some(sha);
-            }
-            write_journal(&journal, cfg)?;
-        }
-
-        if plan_node.needs_input_sync && !updated_deps.is_empty() {
-            for update in &updated_deps {
-                let target_rev = update.target_rev.as_deref().unwrap_or("HEAD");
-                update_flake_lock_input(&node.path, &update.input_name, target_rev)?;
-            }
-
-            let lock_path = node.path.join("flake.lock");
-            if lock_path.exists() {
                 let msg = messages
                     .and_then(|m| m.get(node_id))
                     .cloned()
-                    .unwrap_or_else(|| plan_node.message.clone());
+                    .unwrap_or_else(|| message.clone());
 
-                git::git_add(&node.path, &[lock_path.to_string_lossy().to_string()])?;
+                git::git_add(&node.path, &files)?;
                 let trailed = crate::model::add_trailers(&msg, &plan.transaction_id, &cfg.workspace);
                 git::git_commit(&node.path, &trailed)?;
                 let sha = git::git_head(&node.path)?;
@@ -428,125 +425,142 @@ pub fn execute_sync(
                 }
                 write_journal(&journal, cfg)?;
             }
-        }
-    }
+            SyncAction::UpdateInputs { node: node_id, updates, message } => {
+                let node = match graph.get_node(node_id) {
+                    Some(n) => n,
+                    None => continue,
+                };
 
-    journal.phase = JournalPhase::Validated;
-    write_journal(&journal, cfg)?;
+                let updated_deps: Vec<InputUpdate> = updates
+                    .iter()
+                    .map(|u| {
+                        let rev = commit_shas.get(&u.dependency_node).cloned();
+                        InputUpdate {
+                            input_name: u.input_name.clone(),
+                            dependency_node: u.dependency_node.clone(),
+                            target_rev: rev,
+                        }
+                    })
+                    .collect();
 
-    for node_id in &plan.commit_order {
-        let plan_node = match plan.node_plans.get(node_id) {
-            Some(p) => p,
-            None => continue,
-        };
-        if !plan_node.needs_code_commit && !plan_node.needs_input_sync {
-            continue;
-        }
+                if updated_deps.is_empty() {
+                    continue;
+                }
 
-        let node = match graph.get_node(node_id) {
-            Some(n) => n,
-            None => continue,
-        };
+                for update in &updated_deps {
+                    let target_rev = update.target_rev.as_deref().unwrap_or("HEAD");
+                    update_flake_lock_input(&node.path, &update.input_name, target_rev)?;
+                }
 
-        if !node.path.join(".git").exists() {
-            continue;
-        }
-        let porcelain = git::git_porcelain(&node.path)?;
-        let has_tracked_changes = porcelain.lines().any(|line| {
-            if line.len() < 2 { return false; }
-            let idx = line.as_bytes()[0] as char;
-            let wt = line.as_bytes()[1] as char;
-            // Only count staged changes (idx != space/?/!) as real tracked changes.
-            // Worktree-only modifications (space + M) for submodules are expected
-            // after sync commits that update submodule pointers.
-            idx != ' ' && idx != '?' && idx != '!'
-        });
-        if has_tracked_changes {
-            return Err(format!("Repo '{}' has uncommitted tracked changes after sync commit", node.name));
-        }
+                let lock_path = node.path.join("flake.lock");
+                if lock_path.exists() {
+                    let msg = messages
+                        .and_then(|m| m.get(node_id))
+                        .cloned()
+                        .unwrap_or_else(|| message.clone());
 
-        let lock_path = node.path.join("flake.lock");
-        if lock_path.exists() && plan_node.needs_input_sync {
-            for update in &plan_node.dependencies_to_update {
-                let expected_rev = commit_shas.get(&update.dependency_node);
-                verify_lockfile_rev(&lock_path, &update.input_name, expected_rev.map(|s| s.as_str()))?;
+                    git::git_add(&node.path, &[lock_path.to_string_lossy().to_string()])?;
+                    let trailed = crate::model::add_trailers(&msg, &plan.transaction_id, &cfg.workspace);
+                    git::git_commit(&node.path, &trailed)?;
+                    let sha = git::git_head(&node.path)?;
+                    commit_shas.insert(node_id.clone(), sha.clone());
+
+                    if let Some(entry) = journal.nodes.get_mut(node_id) {
+                        entry.commit_sha = Some(sha);
+                    }
+                    write_journal(&journal, cfg)?;
+                }
+            }
+            SyncAction::Validate { node: node_id } => {
+                let plan_node = match plan.node_plans.get(node_id) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let node = match graph.get_node(node_id) {
+                    Some(n) => n,
+                    None => continue,
+                };
+
+                if !node.path.join(".git").exists() {
+                    continue;
+                }
+                let porcelain = git::git_porcelain(&node.path)?;
+                let has_tracked_changes = porcelain.lines().any(|line| {
+                    if line.len() < 2 { return false; }
+                    let idx = line.as_bytes()[0] as char;
+                    // Only count staged changes (idx != space/?/!) as real tracked changes.
+                    idx != ' ' && idx != '?' && idx != '!'
+                });
+                if has_tracked_changes {
+                    return Err(format!("Repo '{}' has uncommitted tracked changes after sync commit", node.name));
+                }
+
+                let lock_path = node.path.join("flake.lock");
+                if lock_path.exists() && plan_node.needs_input_sync {
+                    for update in &plan_node.dependencies_to_update {
+                        let expected_rev = commit_shas.get(&update.dependency_node);
+                        verify_lockfile_rev(&lock_path, &update.input_name, expected_rev.map(|s| s.as_str()))?;
+                    }
+                }
+
+                for cmd_parts in &plan_node.validation_commands {
+                    if cmd_parts.is_empty() {
+                        continue;
+                    }
+                    let output = std::process::Command::new(&cmd_parts[0])
+                        .args(&cmd_parts[1..])
+                        .current_dir(&node.path)
+                        .output()
+                        .map_err(|e| format!("Validation command failed: {}", e))?;
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        return Err(format!(
+                            "Validation failed in '{}': {} {}",
+                            node.name,
+                            cmd_parts.join(" "),
+                            stderr.trim()
+                        ));
+                    }
+                }
+            }
+            SyncAction::Push { node: node_id } => {
+                if no_push {
+                    continue;
+                }
+
+                let node = match graph.get_node(node_id) {
+                    Some(n) => n,
+                    None => continue,
+                };
+
+                let result = git_push(&node.path, &node.branch);
+                if let Err(ref e) = result {
+                    push_results.insert(node.name.clone(), Err(e.clone()));
+                    journal.phase = JournalPhase::Failed;
+                    write_journal(&journal, cfg)?;
+                    let pushed_nodes: Vec<String> = push_results
+                        .iter()
+                        .filter(|(_, r)| r.is_ok())
+                        .map(|(name, _)| name.clone())
+                        .collect();
+                    let failed_nodes: Vec<String> = push_results
+                        .iter()
+                        .filter(|(_, r)| r.is_err())
+                        .map(|(name, _)| name.clone())
+                        .collect();
+                    return Err(format!(
+                        "Push failed for '{}': {}\nPushed: {}\nFailed: {}\nResume: stitch commit --resume {}",
+                        node.name, e, pushed_nodes.join(", "), failed_nodes.join(", "), plan.transaction_id
+                    ));
+                }
+
+                push_results.insert(node.name.clone(), Ok(()));
+                if let Some(entry) = journal.nodes.get_mut(node_id) {
+                    entry.pushed = true;
+                }
+                write_journal(&journal, cfg)?;
             }
         }
-
-        for cmd_parts in &plan_node.validation_commands {
-            if cmd_parts.is_empty() {
-                continue;
-            }
-            let output = std::process::Command::new(&cmd_parts[0])
-                .args(&cmd_parts[1..])
-                .current_dir(&node.path)
-                .output()
-                .map_err(|e| format!("Validation command failed: {}", e))?;
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(format!(
-                    "Validation failed in '{}': {} {}",
-                    node.name,
-                    cmd_parts.join(" "),
-                    stderr.trim()
-                ));
-            }
-        }
-    }
-
-    if no_push {
-        return Ok(SyncExecutionResult {
-            transaction_id: plan.transaction_id.clone(),
-            created_commits: commit_shas,
-            push_results: BTreeMap::new(),
-            phase: JournalPhase::Committed,
-        });
-    }
-
-    journal.phase = JournalPhase::Pushing;
-    write_journal(&journal, cfg)?;
-
-    let mut push_results: BTreeMap<String, Result<(), String>> = BTreeMap::new();
-    for node_id in &plan.push_order {
-        let plan_node = match plan.node_plans.get(node_id) {
-            Some(p) => p,
-            None => continue,
-        };
-        if !plan_node.needs_code_commit && !plan_node.needs_input_sync {
-            continue;
-        }
-
-        let node = match graph.get_node(node_id) {
-            Some(n) => n,
-            None => continue,
-        };
-
-        let result = git_push(&node.path, &node.branch);
-        if let Err(ref e) = result {
-            push_results.insert(node.name.clone(), Err(e.clone()));
-            journal.phase = JournalPhase::Failed;
-            write_journal(&journal, cfg)?;
-            let pushed_nodes: Vec<String> = push_results
-                .iter()
-                .filter(|(_, r)| r.is_ok())
-                .map(|(name, _)| name.clone())
-                .collect();
-            let failed_nodes: Vec<String> = push_results
-                .iter()
-                .filter(|(_, r)| r.is_err())
-                .map(|(name, _)| name.clone())
-                .collect();
-            return Err(format!(
-                "Push failed for '{}': {}\nPushed: {}\nFailed: {}\nResume: stitch commit --sync --resume {}",
-                node.name, e, pushed_nodes.join(", "), failed_nodes.join(", "), plan.transaction_id
-            ));
-        }
-
-        push_results.insert(node.name.clone(), Ok(()));
-        if let Some(entry) = journal.nodes.get_mut(node_id) {
-            entry.pushed = true;
-        }
-        write_journal(&journal, cfg)?;
     }
 
     journal.phase = JournalPhase::Completed;
@@ -758,7 +772,8 @@ pub fn resume_sync(
     if journal.phase == JournalPhase::Pushing || journal.phase == JournalPhase::Committed || journal.phase == JournalPhase::Validated {
         let mut push_results: BTreeMap<String, Result<(), String>> = BTreeMap::new();
         let mut any_failed = false;
-        for node_id in &plan.push_order {
+        for action in &plan.actions {
+            let SyncAction::Push { node: node_id } = action else { continue };
             let entry = match journal.nodes.get(node_id) {
                 Some(e) => e,
                 None => continue,
@@ -848,6 +863,13 @@ fn load_journal(transaction_id: &str, cfg: &WorkspaceConfig) -> Result<Option<Tr
 
 pub fn format_plan_output(plan: &SyncCommitPlan, json_output: bool) -> String {
     if json_output {
+        let action_list: Vec<serde_json::Value> = plan.actions.iter().map(|a| match a {
+            SyncAction::Commit { node, .. } => serde_json::json!({ "type": "commit", "node": node }),
+            SyncAction::UpdateInputs { node, .. } => serde_json::json!({ "type": "update-inputs", "node": node }),
+            SyncAction::Validate { node } => serde_json::json!({ "type": "validate", "node": node }),
+            SyncAction::Push { node } => serde_json::json!({ "type": "push", "node": node }),
+        }).collect();
+
         return serde_json::to_string_pretty(&serde_json::json!({
             "decision": if plan.blocked_reasons.is_empty() { "ready" } else { "blocked" },
             "root": plan.root,
@@ -861,8 +883,7 @@ pub fn format_plan_output(plan: &SyncCommitPlan, json_output: bool) -> String {
                     "message": np.message,
                 })
             }).collect::<Vec<_>>(),
-            "commit_order": plan.commit_order,
-            "push_order": plan.push_order,
+            "actions": action_list,
             "blocked_reasons": plan.blocked_reasons,
         }))
         .unwrap_or_default();
@@ -880,29 +901,27 @@ pub fn format_plan_output(plan: &SyncCommitPlan, json_output: bool) -> String {
         output.push('\n');
     }
 
-    output.push_str("Nodes:\n");
-    for id in &plan.commit_order {
-        let np = match plan.node_plans.get(id) {
-            Some(p) => p,
-            None => continue,
-        };
-        let actions: Vec<&str> = {
-            let mut a = Vec::new();
-            if np.needs_code_commit { a.push("commit"); }
-            if np.needs_input_sync { a.push("sync-inputs"); }
-            a
-        };
-        output.push_str(&format!("  {}: {}\n", id, actions.join(" + ")));
-        if np.needs_input_sync {
-            for u in &np.dependencies_to_update {
-                output.push_str(&format!("    update input '{}' -> {}\n", u.input_name, u.dependency_node));
+    output.push_str("Action plan:\n");
+    for (i, action) in plan.actions.iter().enumerate() {
+        match action {
+            SyncAction::Commit { node, message } => {
+                output.push_str(&format!("  {}. {}: commit\n", i + 1, node));
+                output.push_str(&format!("       message: {}\n", message));
+            }
+            SyncAction::UpdateInputs { node, updates, .. } => {
+                output.push_str(&format!("  {}. {}: update-inputs\n", i + 1, node));
+                for u in updates {
+                    output.push_str(&format!("       {} -> {}\n", u.input_name, u.dependency_node));
+                }
+            }
+            SyncAction::Validate { node } => {
+                output.push_str(&format!("  {}. {}: validate\n", i + 1, node));
+            }
+            SyncAction::Push { node } => {
+                output.push_str(&format!("  {}. {}: push\n", i + 1, node));
             }
         }
-        output.push_str(&format!("    message: {}\n", np.message));
     }
-
-    output.push_str(&format!("\nCommit order: {}\n", plan.commit_order.join(" -> ")));
-    output.push_str(&format!("Push order:   {}\n", plan.push_order.join(" -> ")));
 
     output
 }
@@ -1001,13 +1020,18 @@ mod tests {
         }
     }
 
+    fn action_nodes(plan: &SyncCommitPlan) -> Vec<String> {
+        plan.actions.iter().map(|a| a.node().clone()).collect()
+    }
+
     #[test]
     fn test_plan_sync_dirty_tools() {
         let graph = make_test_graph();
         let statuses = vec![make_status("tools", true), make_status("shell", false), make_status("root", false)];
         let cfg = WorkspaceConfig { version: 1, workspace: "test".to_string(), repos: vec![], config_dir: None };
         let plan = plan_sync(&graph, &statuses, &cfg).unwrap();
-        assert_eq!(plan.commit_order, vec!["tools", "shell", "root"]);
+        let order = action_nodes(&plan);
+        assert_eq!(order, vec!["tools", "shell", "root", "tools", "shell", "root", "tools", "shell", "root"]);
         let tools = plan.node_plans.get("tools").unwrap();
         assert!(tools.needs_code_commit);
         assert!(!tools.needs_input_sync);
@@ -1017,6 +1041,16 @@ mod tests {
         let root = plan.node_plans.get("root").unwrap();
         assert!(!root.needs_code_commit);
         assert!(root.needs_input_sync);
+        // Check action types
+        assert!(matches!(plan.actions[0], SyncAction::Commit { .. }));
+        assert!(matches!(plan.actions[1], SyncAction::UpdateInputs { .. }));
+        assert!(matches!(plan.actions[2], SyncAction::UpdateInputs { .. }));
+        assert!(matches!(plan.actions[3], SyncAction::Validate { .. }));
+        assert!(matches!(plan.actions[4], SyncAction::Validate { .. }));
+        assert!(matches!(plan.actions[5], SyncAction::Validate { .. }));
+        assert!(matches!(plan.actions[6], SyncAction::Push { .. }));
+        assert!(matches!(plan.actions[7], SyncAction::Push { .. }));
+        assert!(matches!(plan.actions[8], SyncAction::Push { .. }));
     }
 
     #[test]
@@ -1025,7 +1059,8 @@ mod tests {
         let statuses = vec![make_status("tools", false), make_status("shell", true), make_status("root", false)];
         let cfg = WorkspaceConfig { version: 1, workspace: "test".to_string(), repos: vec![], config_dir: None };
         let plan = plan_sync(&graph, &statuses, &cfg).unwrap();
-        assert_eq!(plan.commit_order, vec!["shell", "root"]);
+        let order = action_nodes(&plan);
+        assert_eq!(order, vec!["shell", "root", "shell", "root", "shell", "root"]);
         let shell = plan.node_plans.get("shell").unwrap();
         assert!(shell.needs_code_commit);
         assert!(!shell.needs_input_sync);
@@ -1040,7 +1075,8 @@ mod tests {
         let statuses = vec![make_status("tools", false), make_status("shell", false), make_status("root", true)];
         let cfg = WorkspaceConfig { version: 1, workspace: "test".to_string(), repos: vec![], config_dir: None };
         let plan = plan_sync(&graph, &statuses, &cfg).unwrap();
-        assert_eq!(plan.commit_order, vec!["root"]);
+        let order = action_nodes(&plan);
+        assert_eq!(order, vec!["root", "root", "root"]);
         let root = plan.node_plans.get("root").unwrap();
         assert!(root.needs_code_commit);
         assert!(!root.needs_input_sync);
@@ -1052,7 +1088,9 @@ mod tests {
         let statuses = vec![make_status("tools", true), make_status("shell", true), make_status("root", false)];
         let cfg = WorkspaceConfig { version: 1, workspace: "test".to_string(), repos: vec![], config_dir: None };
         let plan = plan_sync(&graph, &statuses, &cfg).unwrap();
-        assert_eq!(plan.commit_order, vec!["tools", "shell", "root"]);
+        let order = action_nodes(&plan);
+        // tools: commit; shell: commit + update-inputs; root: update-inputs
+        assert_eq!(order, vec!["tools", "shell", "shell", "root", "tools", "shell", "root", "tools", "shell", "root"]);
         let tools = plan.node_plans.get("tools").unwrap();
         assert!(tools.needs_code_commit);
         assert!(!tools.needs_input_sync);
@@ -1070,7 +1108,7 @@ mod tests {
         let statuses = vec![make_status("tools", false), make_status("shell", false), make_status("root", false)];
         let cfg = WorkspaceConfig { version: 1, workspace: "test".to_string(), repos: vec![], config_dir: None };
         let plan = plan_sync(&graph, &statuses, &cfg).unwrap();
-        assert!(plan.commit_order.is_empty());
+        assert!(plan.actions.is_empty());
     }
 
     #[test]
@@ -1079,7 +1117,14 @@ mod tests {
         let statuses = vec![make_status("tools", true), make_status("shell", true), make_status("root", true)];
         let cfg = WorkspaceConfig { version: 1, workspace: "test".to_string(), repos: vec![], config_dir: None };
         let plan = plan_sync(&graph, &statuses, &cfg).unwrap();
-        assert_eq!(plan.commit_order, plan.push_order);
+        // Push actions should be last, one per affected node in the same order
+        let commit_nodes: Vec<&str> = plan.actions.iter().filter_map(|a| {
+            if matches!(a, SyncAction::Commit { .. }) { Some(a.node().as_str()) } else { None }
+        }).collect();
+        let push_nodes: Vec<&str> = plan.actions.iter().filter_map(|a| {
+            if matches!(a, SyncAction::Push { .. }) { Some(a.node().as_str()) } else { None }
+        }).collect();
+        assert_eq!(commit_nodes, push_nodes);
     }
 
     #[test]
