@@ -22,10 +22,7 @@ pub fn build_shell_ref(shell: &ShellConfig) -> String {
     }
 }
 
-pub fn prepare_command(
-    command: &[String],
-    shell: Option<&ShellConfig>,
-) -> PreparedCommand {
+pub fn prepare_command(command: &[String], shell: Option<&ShellConfig>) -> PreparedCommand {
     if command.is_empty() {
         return PreparedCommand {
             program: String::new(),
@@ -116,9 +113,7 @@ pub fn run_command(
         };
         CheckResult {
             outcome: crate::checks::CheckOutcome::Failed {
-                reason: format!(
-                    "command exited with status {status} (expected {expected}){extra}"
-                ),
+                reason: format!("command exited with status {status} (expected {expected}){extra}"),
             },
             stdout,
             stderr,
@@ -150,13 +145,24 @@ mod tests {
 
     #[test]
     fn test_prepare_command_with_shell_named() {
-        let cmd = vec!["stitch".to_string(), "graph".to_string(), "verify".to_string()];
+        let cmd = vec![
+            "stitch".to_string(),
+            "graph".to_string(),
+            "verify".to_string(),
+        ];
         let shell = make_shell(Some("."), Some("test"));
         let prepared = prepare_command(&cmd, Some(&shell));
         assert_eq!(prepared.program, "nix");
         assert_eq!(
             prepared.args,
-            vec!["develop", ".#test", "--command", "stitch", "graph", "verify"]
+            vec![
+                "develop",
+                ".#test",
+                "--command",
+                "stitch",
+                "graph",
+                "verify"
+            ]
         );
     }
 

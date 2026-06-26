@@ -37,7 +37,10 @@ pub fn provider_before_consumer_order(graph: &WorkspaceDag) -> Result<Vec<String
         let consumer = &edge.from;
         let provider = &edge.to;
 
-        outgoing.entry(provider.clone()).or_default().push(consumer.clone());
+        outgoing
+            .entry(provider.clone())
+            .or_default()
+            .push(consumer.clone());
         *indegree.entry(consumer.clone()).or_insert(0) += 1;
     }
 
@@ -87,18 +90,16 @@ fn sort_ready(ready: &mut Vec<String>, graph: &WorkspaceDag) {
     ready.sort_by(|a, b| {
         let layer_a = graph.nodes.get(a).and_then(|n| n.layer).unwrap_or(u32::MAX);
         let layer_b = graph.nodes.get(b).and_then(|n| n.layer).unwrap_or(u32::MAX);
-        layer_a
-            .cmp(&layer_b)
-            .then_with(|| a.cmp(b))
+        layer_a.cmp(&layer_b).then_with(|| a.cmp(b))
     });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::{EdgeReason, NodeKind, RepoRole, WorkspaceEdge, WorkspaceNode};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
-    use crate::graph::{EdgeReason, NodeKind, RepoRole, WorkspaceNode, WorkspaceEdge};
 
     fn make_node(id: &str, layer: Option<u32>) -> WorkspaceNode {
         WorkspaceNode {
@@ -157,10 +158,7 @@ mod tests {
 
     #[test]
     fn test_provider_before_consumer_cycle() {
-        let nodes = vec![
-            make_node("a", None),
-            make_node("b", None),
-        ];
+        let nodes = vec![make_node("a", None), make_node("b", None)];
         let edges = vec![make_edge("a", "b"), make_edge("b", "a")];
         let dag = make_dag(nodes, edges);
         assert!(provider_before_consumer_order(&dag).is_err());

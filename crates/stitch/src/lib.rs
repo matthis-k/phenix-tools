@@ -13,6 +13,9 @@ pub use graph::{
     lock::parse_flake_lock,
     render::RenderFormat,
     topo::provider_before_consumer_order,
-    validate::{validate_graph, DiagnosticSeverity, GraphDiagnostic, GraphValidationReport, ValidateOptions},
-    EdgeReason, ExternalInput, GraphSource, NodeKind, RepoRole, WorkspaceDag, WorkspaceEdge, WorkspaceNode,
+    validate::{
+        validate_graph, DiagnosticSeverity, GraphDiagnostic, GraphValidationReport, ValidateOptions,
+    },
+    EdgeReason, ExternalInput, GraphSource, NodeKind, RepoRole, WorkspaceDag, WorkspaceEdge,
+    WorkspaceNode,
 };

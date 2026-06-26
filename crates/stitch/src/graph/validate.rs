@@ -72,10 +72,7 @@ pub struct GraphValidationReport {
     pub edge_count: usize,
 }
 
-pub fn validate_graph(
-    graph: &WorkspaceDag,
-    opts: &ValidateOptions,
-) -> GraphValidationReport {
+pub fn validate_graph(graph: &WorkspaceDag, opts: &ValidateOptions) -> GraphValidationReport {
     let mut diagnostics = Vec::new();
 
     // 1. Check for unknowns in edges
@@ -207,7 +204,8 @@ pub fn validate_graph(
     }
 
     // 7. Duplicate edge warnings
-    let mut seen_edges: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
+    let mut seen_edges: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
     for edge in &graph.edges {
         let key = (edge.from.clone(), edge.to.clone());
         if !seen_edges.insert(key) {
@@ -401,11 +399,17 @@ fn visit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph::{EdgeReason, NodeKind, RepoRole};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
-    use crate::graph::{EdgeReason, NodeKind, RepoRole};
 
-    fn make_node(id: &str, kind: NodeKind, role: RepoRole, layer: Option<u32>, is_root: bool) -> WorkspaceNode {
+    fn make_node(
+        id: &str,
+        kind: NodeKind,
+        role: RepoRole,
+        layer: Option<u32>,
+        is_root: bool,
+    ) -> WorkspaceNode {
         WorkspaceNode {
             id: id.to_string(),
             path: PathBuf::new(),
@@ -470,7 +474,10 @@ mod tests {
         let graph = make_graph(nodes, edges);
         let report = validate_graph(&graph, &ValidateOptions::default());
         assert!(!report.valid);
-        assert!(report.diagnostics.iter().any(|d| d.code == "cycle_detected"));
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "cycle_detected"));
     }
 
     #[test]
@@ -482,7 +489,10 @@ mod tests {
         let edges = vec![make_edge("pins", "hosts")];
         let graph = make_graph(nodes, edges);
         let report = validate_graph(&graph, &ValidateOptions::default());
-        assert!(report.diagnostics.iter().any(|d| d.code == "layer_violation"));
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "layer_violation"));
     }
 
     #[test]
@@ -494,7 +504,10 @@ mod tests {
         let edges = vec![make_edge("hosts", "pins")];
         let graph = make_graph(nodes, edges);
         let report = validate_graph(&graph, &ValidateOptions::default());
-        assert!(!report.diagnostics.iter().any(|d| d.code == "layer_violation"));
+        assert!(!report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "layer_violation"));
     }
 
     #[test]
@@ -506,7 +519,10 @@ mod tests {
         let edges = vec![make_edge("hosts", "pins")];
         let graph = make_graph(nodes, edges);
         let report = validate_graph(&graph, &ValidateOptions::default());
-        assert!(!report.diagnostics.iter().any(|d| d.code == "layer_violation"));
+        assert!(!report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "layer_violation"));
         assert!(report.valid);
     }
 
@@ -520,44 +536,80 @@ mod tests {
         let graph = make_graph(nodes, edges);
         let report = validate_graph(&graph, &ValidateOptions::default());
         assert!(!report.valid);
-        assert!(report.diagnostics.iter().any(|d| d.code == "root_dependency_violation"));
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "root_dependency_violation"));
     }
 
     #[test]
     fn test_producer_depends_on_producer() {
         let nodes = vec![
-            make_node("tools", NodeKind::ToolProvider, RepoRole::Producer, Some(2), false),
-            make_node("nvim", NodeKind::ToolProvider, RepoRole::Producer, Some(2), false),
+            make_node(
+                "tools",
+                NodeKind::ToolProvider,
+                RepoRole::Producer,
+                Some(2),
+                false,
+            ),
+            make_node(
+                "nvim",
+                NodeKind::ToolProvider,
+                RepoRole::Producer,
+                Some(2),
+                false,
+            ),
             make_node("pins", NodeKind::Pins, RepoRole::Pins, Some(0), false),
         ];
-        let edges = vec![
-            make_edge("tools", "pins"),
-            make_edge("tools", "nvim"),
-        ];
+        let edges = vec![make_edge("tools", "pins"), make_edge("tools", "nvim")];
         let graph = make_graph(nodes, edges);
         let report = validate_graph(&graph, &ValidateOptions::default());
         assert!(!report.valid);
-        assert!(report.diagnostics.iter().any(|d| d.code == "producer_depends_on_producer"));
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "producer_depends_on_producer"));
     }
 
     #[test]
     fn test_producer_depends_on_pkgs_aggregator() {
         let nodes = vec![
-            make_node("tools", NodeKind::ToolProvider, RepoRole::Producer, Some(2), false),
-            make_node("pkgs", NodeKind::PackageProvider, RepoRole::PkgsAggregator, Some(4), false),
+            make_node(
+                "tools",
+                NodeKind::ToolProvider,
+                RepoRole::Producer,
+                Some(2),
+                false,
+            ),
+            make_node(
+                "pkgs",
+                NodeKind::PackageProvider,
+                RepoRole::PkgsAggregator,
+                Some(4),
+                false,
+            ),
         ];
         let edges = vec![make_edge("tools", "pkgs")];
         let graph = make_graph(nodes, edges);
         let report = validate_graph(&graph, &ValidateOptions::default());
         assert!(!report.valid);
-        assert!(report.diagnostics.iter().any(|d| d.code == "producer_depends_on_pkgs_aggregator"));
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "producer_depends_on_pkgs_aggregator"));
     }
 
     #[test]
     fn test_valid_graph() {
         let nodes = vec![
             make_node_old("phenix-pins", NodeKind::Pins, Some(0), false),
-            make_node("phenix-packages", NodeKind::PackageProvider, RepoRole::PkgsAggregator, Some(4), false),
+            make_node(
+                "phenix-packages",
+                NodeKind::PackageProvider,
+                RepoRole::PkgsAggregator,
+                Some(4),
+                false,
+            ),
             make_node_old("phenix-tools", NodeKind::ToolProvider, Some(2), false),
             make_node_old("phenix-hosts", NodeKind::HostConsumer, Some(5), false),
             make_node_old("phenix", NodeKind::WorkspaceRoot, Some(6), true),
@@ -585,7 +637,11 @@ mod tests {
         let edges = vec![make_edge("a", "b"), make_edge("b", "a")];
         let graph = make_graph(nodes, edges);
         let report = validate_graph(&graph, &ValidateOptions::default());
-        let cycle_diag = report.diagnostics.iter().find(|d| d.code == "cycle_detected").unwrap();
+        let cycle_diag = report
+            .diagnostics
+            .iter()
+            .find(|d| d.code == "cycle_detected")
+            .unwrap();
         assert!(cycle_diag.message.contains("a"));
         assert!(cycle_diag.message.contains("b"));
     }

@@ -411,11 +411,7 @@ pub fn plan_local_commit(
         node_plan.validation_commands.clear();
     }
 
-    plan.affected_nodes = plan
-        .actions
-        .iter()
-        .map(|a| a.node().clone())
-        .collect();
+    plan.affected_nodes = plan.actions.iter().map(|a| a.node().clone()).collect();
 
     Ok(plan)
 }
@@ -1073,10 +1069,7 @@ pub fn resume_sync(
                     .status()
                     .map_err(|e| format!("Failed to run tend: {}", e))?;
                 if !status.success() {
-                    return Err(format!(
-                        "Validation failed in '{}' during resume",
-                        node_id,
-                    ));
+                    return Err(format!("Validation failed in '{}' during resume", node_id,));
                 }
 
                 if let Some(e) = resume_journal

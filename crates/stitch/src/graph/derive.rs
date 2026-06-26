@@ -55,8 +55,7 @@ pub fn derive_graph_from_locks(
     root: &Path,
     metadata: Option<&Path>,
 ) -> Result<WorkspaceDag, GraphError> {
-    let discovery = discover_inventory(root, metadata)
-        .map_err(|e| GraphError::Io(e))?;
+    let discovery = discover_inventory(root, metadata).map_err(|e| GraphError::Io(e))?;
     let aliases = build_workspace_aliases(&discovery.nodes);
 
     let mut graph = WorkspaceDag::new(discovery.nodes);
@@ -70,7 +69,10 @@ pub fn derive_graph_from_locks(
         if !lock_path.exists() {
             graph.diagnostics.push(GraphDiagnostic::warn(
                 "missing_flake_lock",
-                format!("node '{node_id}' has no flake.lock at {}", lock_path.display()),
+                format!(
+                    "node '{node_id}' has no flake.lock at {}",
+                    lock_path.display()
+                ),
                 vec![node_id.clone()],
             ));
             continue;
@@ -132,9 +134,11 @@ pub fn derive_graph_from_locks(
                     });
                 }
             } else {
-                graph
-                    .external_inputs
-                    .push(external_from_lock(node_id.clone(), input_name.clone(), target_lock_node));
+                graph.external_inputs.push(external_from_lock(
+                    node_id.clone(),
+                    input_name.clone(),
+                    target_lock_node,
+                ));
             }
         }
     }

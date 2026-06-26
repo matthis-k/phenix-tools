@@ -9,7 +9,11 @@ pub struct ProfileViolation {
 
 impl std::fmt::Display for ProfileViolation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "task '{}' in profile '{}': {}", self.task_id, self.profile, self.message)
+        write!(
+            f,
+            "task '{}' in profile '{}': {}",
+            self.task_id, self.profile, self.message
+        )
     }
 }
 
@@ -31,13 +35,17 @@ pub fn validate_profiles(nodes: &[ResolvedNode]) -> Result<(), Vec<ProfileViolat
                     violations.push(ProfileViolation {
                         task_id: task.config.id.clone(),
                         profile: profile.clone(),
-                        message: "must not invoke 'nix flake check' (would cause recursion)".to_string(),
+                        message: "must not invoke 'nix flake check' (would cause recursion)"
+                            .to_string(),
                     });
                 }
 
                 // Rule: mutating tasks are forbidden in nix-check and git-hook
                 if (profile == "nix-check" || profile == "git-hook")
-                    && task.config.mutates.unwrap_or_else(|| crate::config::default_mutates(&task.config.phase))
+                    && task
+                        .config
+                        .mutates
+                        .unwrap_or_else(|| crate::config::default_mutates(&task.config.phase))
                 {
                     violations.push(ProfileViolation {
                         task_id: task.config.id.clone(),
@@ -64,21 +72,24 @@ pub fn validate_profiles(nodes: &[ResolvedNode]) -> Result<(), Vec<ProfileViolat
                             violations.push(ProfileViolation {
                                 task_id: task.config.id.clone(),
                                 profile: profile.clone(),
-                                message: "test tasks are not allowed in git-hook profile".to_string(),
+                                message: "test tasks are not allowed in git-hook profile"
+                                    .to_string(),
                             });
                         }
                         if tags.iter().any(|t| t == "slow") {
                             violations.push(ProfileViolation {
                                 task_id: task.config.id.clone(),
                                 profile: profile.clone(),
-                                message: "slow tasks are not allowed in git-hook profile".to_string(),
+                                message: "slow tasks are not allowed in git-hook profile"
+                                    .to_string(),
                             });
                         }
                         if tags.iter().any(|t| t == "network") {
                             violations.push(ProfileViolation {
                                 task_id: task.config.id.clone(),
                                 profile: profile.clone(),
-                                message: "network tasks are not allowed in git-hook profile".to_string(),
+                                message: "network tasks are not allowed in git-hook profile"
+                                    .to_string(),
                             });
                         }
                     }
@@ -91,7 +102,8 @@ pub fn validate_profiles(nodes: &[ResolvedNode]) -> Result<(), Vec<ProfileViolat
                             violations.push(ProfileViolation {
                                 task_id: task.config.id.clone(),
                                 profile: profile.clone(),
-                                message: "network tasks are not allowed in nix-check profile".to_string(),
+                                message: "network tasks are not allowed in nix-check profile"
+                                    .to_string(),
                             });
                         }
                     }
@@ -120,13 +132,23 @@ mod tests {
     use crate::model::*;
     use std::path::Path;
 
-    fn make_verify_task(id: &str, profiles: Vec<&str>, tags: Vec<&str>, mutates: bool, interactive: bool, command: Vec<&str>) -> ResolvedTask {
+    fn make_verify_task(
+        id: &str,
+        profiles: Vec<&str>,
+        tags: Vec<&str>,
+        mutates: bool,
+        interactive: bool,
+        command: Vec<&str>,
+    ) -> ResolvedTask {
         ResolvedTask {
             config: TaskConfig {
                 id: id.to_string(),
                 description: None,
                 phase: Phase::Verify,
-                kind: TaskKind::Command { command: command.iter().map(|s| s.to_string()).collect(), expect: None },
+                kind: TaskKind::Command {
+                    command: command.iter().map(|s| s.to_string()).collect(),
+                    expect: None,
+                },
                 context: None,
                 tags: Some(tags.iter().map(|s| s.to_string()).collect()),
                 profiles: Some(profiles.iter().map(|s| s.to_string()).collect()),
@@ -151,7 +173,11 @@ mod tests {
             description: String::new(),
             tags: vec![],
             when: None,
-            context: ContextConfig { workdir: None, env: None, shell: None },
+            context: ContextConfig {
+                workdir: None,
+                env: None,
+                shell: None,
+            },
             before: vec![],
             after: vec![],
             tasks,
@@ -160,7 +186,14 @@ mod tests {
 
     #[test]
     fn test_fails_if_test_task_in_git_hook() {
-        let task = make_verify_task("cargo-test", vec!["git-hook"], vec!["test"], false, false, vec!["cargo", "test"]);
+        let task = make_verify_task(
+            "cargo-test",
+            vec!["git-hook"],
+            vec!["test"],
+            false,
+            false,
+            vec!["cargo", "test"],
+        );
         let node = make_node("root", vec![task]);
         let result = validate_profiles(&[node]);
         assert!(result.is_err());
@@ -170,7 +203,14 @@ mod tests {
 
     #[test]
     fn test_fails_if_slow_task_in_git_hook() {
-        let task = make_verify_task("slow-task", vec!["git-hook"], vec!["slow"], false, false, vec!["cargo", "test"]);
+        let task = make_verify_task(
+            "slow-task",
+            vec!["git-hook"],
+            vec!["slow"],
+            false,
+            false,
+            vec!["cargo", "test"],
+        );
         let node = make_node("root", vec![task]);
         let result = validate_profiles(&[node]);
         assert!(result.is_err());
@@ -178,7 +218,14 @@ mod tests {
 
     #[test]
     fn test_fails_if_network_task_in_nix_check() {
-        let task = make_verify_task("network-task", vec!["nix-check"], vec!["network"], false, false, vec!["curl"]);
+        let task = make_verify_task(
+            "network-task",
+            vec!["nix-check"],
+            vec!["network"],
+            false,
+            false,
+            vec!["curl"],
+        );
         let node = make_node("root", vec![task]);
         let result = validate_profiles(&[node]);
         assert!(result.is_err());
@@ -186,7 +233,14 @@ mod tests {
 
     #[test]
     fn test_fails_if_mutating_in_nix_check() {
-        let task = make_verify_task("fmt-fix", vec!["nix-check"], vec!["format"], true, false, vec!["cargo", "fmt"]);
+        let task = make_verify_task(
+            "fmt-fix",
+            vec!["nix-check"],
+            vec!["format"],
+            true,
+            false,
+            vec!["cargo", "fmt"],
+        );
         let node = make_node("root", vec![task]);
         let result = validate_profiles(&[node]);
         assert!(result.is_err());
@@ -194,7 +248,14 @@ mod tests {
 
     #[test]
     fn test_fails_if_interactive_in_nix_check() {
-        let task = make_verify_task("interactive-task", vec!["nix-check"], vec![], false, true, vec!["vim"]);
+        let task = make_verify_task(
+            "interactive-task",
+            vec!["nix-check"],
+            vec![],
+            false,
+            true,
+            vec!["vim"],
+        );
         let node = make_node("root", vec![task]);
         let result = validate_profiles(&[node]);
         assert!(result.is_err());
@@ -202,7 +263,14 @@ mod tests {
 
     #[test]
     fn test_fails_if_nix_flake_check_in_nix_check() {
-        let task = make_verify_task("nix-flake-check", vec!["nix-check"], vec!["nix"], false, false, vec!["nix", "flake", "check"]);
+        let task = make_verify_task(
+            "nix-flake-check",
+            vec!["nix-check"],
+            vec!["nix"],
+            false,
+            false,
+            vec!["nix", "flake", "check"],
+        );
         let node = make_node("root", vec![task]);
         let result = validate_profiles(&[node]);
         assert!(result.is_err());
@@ -210,7 +278,14 @@ mod tests {
 
     #[test]
     fn test_fails_if_mutating_in_git_hook() {
-        let task = make_verify_task("fmt-fix", vec!["git-hook"], vec!["format"], true, false, vec!["cargo", "fmt"]);
+        let task = make_verify_task(
+            "fmt-fix",
+            vec!["git-hook"],
+            vec!["format"],
+            true,
+            false,
+            vec!["cargo", "fmt"],
+        );
         let node = make_node("root", vec![task]);
         let result = validate_profiles(&[node]);
         assert!(result.is_err());
@@ -218,7 +293,14 @@ mod tests {
 
     #[test]
     fn test_fails_if_interactive_in_git_hook() {
-        let task = make_verify_task("interactive-task", vec!["git-hook"], vec![], false, true, vec!["vim"]);
+        let task = make_verify_task(
+            "interactive-task",
+            vec!["git-hook"],
+            vec![],
+            false,
+            true,
+            vec!["vim"],
+        );
         let node = make_node("root", vec![task]);
         let result = validate_profiles(&[node]);
         assert!(result.is_err());
@@ -226,7 +308,14 @@ mod tests {
 
     #[test]
     fn test_fails_if_network_in_git_hook() {
-        let task = make_verify_task("network-task", vec!["git-hook"], vec!["network"], false, false, vec!["curl"]);
+        let task = make_verify_task(
+            "network-task",
+            vec!["git-hook"],
+            vec!["network"],
+            false,
+            false,
+            vec!["curl"],
+        );
         let node = make_node("root", vec![task]);
         let result = validate_profiles(&[node]);
         assert!(result.is_err());
@@ -234,7 +323,14 @@ mod tests {
 
     #[test]
     fn test_actionable_error_messages() {
-        let task = make_verify_task("cargo-test", vec!["git-hook"], vec!["test"], false, false, vec!["cargo", "test"]);
+        let task = make_verify_task(
+            "cargo-test",
+            vec!["git-hook"],
+            vec!["test"],
+            false,
+            false,
+            vec!["cargo", "test"],
+        );
         let node = make_node("root", vec![task]);
         let result = validate_profiles(&[node]);
         assert!(result.is_err());
@@ -246,8 +342,22 @@ mod tests {
 
     #[test]
     fn test_nix_check_excludes_nix_flake_check_task() {
-        let bad = make_verify_task("nix-flake-check", vec!["nix-check"], vec!["nix"], false, false, vec!["nix", "flake", "check"]);
-        let good = make_verify_task("cargo-test", vec!["nix-check"], vec!["test"], false, false, vec!["cargo", "test"]);
+        let bad = make_verify_task(
+            "nix-flake-check",
+            vec!["nix-check"],
+            vec!["nix"],
+            false,
+            false,
+            vec!["nix", "flake", "check"],
+        );
+        let good = make_verify_task(
+            "cargo-test",
+            vec!["nix-check"],
+            vec!["test"],
+            false,
+            false,
+            vec!["cargo", "test"],
+        );
         let node = make_node("root", vec![bad, good]);
         let result = validate_profiles(&[node]);
         assert!(result.is_err());
@@ -259,7 +369,14 @@ mod tests {
 
     #[test]
     fn test_network_task_in_git_hook_fails() {
-        let task = make_verify_task("net-task", vec!["git-hook"], vec!["network"], false, false, vec!["curl"]);
+        let task = make_verify_task(
+            "net-task",
+            vec!["git-hook"],
+            vec!["network"],
+            false,
+            false,
+            vec!["curl"],
+        );
         let node = make_node("root", vec![task]);
         let result = validate_profiles(&[node]);
         assert!(result.is_err());
@@ -267,7 +384,14 @@ mod tests {
 
     #[test]
     fn test_slow_task_in_git_hook_fails() {
-        let task = make_verify_task("slow-task", vec!["git-hook"], vec!["slow"], false, false, vec!["cargo", "test"]);
+        let task = make_verify_task(
+            "slow-task",
+            vec!["git-hook"],
+            vec!["slow"],
+            false,
+            false,
+            vec!["cargo", "test"],
+        );
         let node = make_node("root", vec![task]);
         let result = validate_profiles(&[node]);
         assert!(result.is_err());

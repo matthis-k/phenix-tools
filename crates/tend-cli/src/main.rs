@@ -88,7 +88,10 @@ enum Commands {
     Explain,
     /// High-level check command with profile-based selection
     Check {
-        #[arg(long, help = "Profile name (git-hook, pre-push, nix-check, manual, fix, stitch-sync)")]
+        #[arg(
+            long,
+            help = "Profile name (git-hook, pre-push, nix-check, manual, fix, stitch-sync)"
+        )]
         profile: String,
         #[arg(long, help = "Only check staged changes")]
         staged: bool,
@@ -178,7 +181,11 @@ fn main() {
             &files,
             json,
         ),
-        Commands::Run { phase, mode, profile } => match Phase::from_str(&phase) {
+        Commands::Run {
+            phase,
+            mode,
+            profile,
+        } => match Phase::from_str(&phase) {
             Ok(p) => match RunMode::from_str(&mode) {
                 Ok(m) => cmd_run(&root, configs.as_deref(), p, m, profile.as_deref()),
                 Err(e) => Err(e),
@@ -385,7 +392,11 @@ fn cmd_preflight(
 
             let req = PlanRequest {
                 phase: Phase::Verify,
-                mode: if staged { RunMode::Staged } else { RunMode::Changed },
+                mode: if staged {
+                    RunMode::Staged
+                } else {
+                    RunMode::Changed
+                },
                 profile: Some(profile.clone()),
                 group: None,
                 target: None,
@@ -429,7 +440,10 @@ fn cmd_preflight(
             let tree_hash = get_git_tree_hash(root).unwrap_or_else(|| "unknown".to_string());
 
             if stored.version != 1 {
-                return Err(format!("unsupported preflight token version: {}", stored.version));
+                return Err(format!(
+                    "unsupported preflight token version: {}",
+                    stored.version
+                ));
             }
 
             if stored.profile != profile {
@@ -470,7 +484,9 @@ fn get_git_tree_hash(root: &std::path::Path) -> Option<String> {
         .ok()
         .and_then(|o| {
             if o.status.success() {
-                String::from_utf8(o.stdout).ok().map(|s| s.trim().to_string())
+                String::from_utf8(o.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
             } else {
                 None
             }
@@ -542,7 +558,11 @@ fn base64_decode(input: &str) -> Option<String> {
             .filter_map(|&b| {
                 if (b as usize) < 128 {
                     let v = DECODE[b as usize];
-                    if v >= 0 { Some(v as u8) } else { None }
+                    if v >= 0 {
+                        Some(v as u8)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -593,7 +613,10 @@ fn cmd_tree(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> 
         println!("    tasks: {}", node.tasks.len());
         for task in &node.tasks {
             let desc = task.config.description.as_deref().unwrap_or("");
-            let profiles = task.config.profiles.as_ref()
+            let profiles = task
+                .config
+                .profiles
+                .as_ref()
                 .map(|p| format!(" profiles=[{}]", p.join(",")))
                 .unwrap_or_default();
             println!(
@@ -624,7 +647,10 @@ fn cmd_list(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> 
                 .config
                 .mutates
                 .unwrap_or_else(|| config::default_mutates(&task.config.phase));
-            let profiles = task.config.profiles.as_ref()
+            let profiles = task
+                .config
+                .profiles
+                .as_ref()
                 .map(|p| format!(" [{}]", p.join(",")))
                 .unwrap_or_default();
             println!(
@@ -752,7 +778,10 @@ fn cmd_explain(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, Strin
             if !desc.is_empty() {
                 println!("  description: {}", desc);
             }
-            let profiles = task.config.profiles.as_ref()
+            let profiles = task
+                .config
+                .profiles
+                .as_ref()
                 .map(|p| p.join(", "))
                 .unwrap_or_else(|| "manual (default)".to_string());
             println!("  profiles: {}", profiles);
@@ -888,7 +917,9 @@ fn cmd_plan(
             .unwrap()
         );
     } else {
-        let profile_str = profile.map(|p| format!(" profile='{p}'")).unwrap_or_default();
+        let profile_str = profile
+            .map(|p| format!(" profile='{p}'"))
+            .unwrap_or_default();
         println!(
             "Checks that would run (mode: {}, phase: {},{}):",
             run_mode, phase, profile_str

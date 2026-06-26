@@ -602,7 +602,12 @@ mod tests {
         }
     }
 
-    fn make_task_with_profiles_and_phase(id: &str, profiles: Vec<&str>, phase: Phase, mutates: bool) -> ResolvedTask {
+    fn make_task_with_profiles_and_phase(
+        id: &str,
+        profiles: Vec<&str>,
+        phase: Phase,
+        mutates: bool,
+    ) -> ResolvedTask {
         ResolvedTask {
             config: TaskConfig {
                 id: id.to_string(),
@@ -645,7 +650,11 @@ mod tests {
     fn test_git_hook_includes_format_config_checks() {
         let task = make_task_with_profiles("tend-validate", vec!["git-hook", "manual"]);
         let node = make_node("root", vec![task]);
-        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("git-hook"))).unwrap();
+        let plan = build_plan(
+            &[node],
+            &req_with_profile(Phase::Verify, RunMode::Full, Some("git-hook")),
+        )
+        .unwrap();
         assert_eq!(plan.items.len(), 1);
         assert_eq!(plan.items[0].task_id, "tend-validate");
     }
@@ -654,7 +663,11 @@ mod tests {
     fn test_git_hook_excludes_cargo_test() {
         let task = make_task_with_profiles("cargo-test", vec!["manual", "nix-check"]);
         let node = make_node("root", vec![task]);
-        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("git-hook"))).unwrap();
+        let plan = build_plan(
+            &[node],
+            &req_with_profile(Phase::Verify, RunMode::Full, Some("git-hook")),
+        )
+        .unwrap();
         assert_eq!(plan.items.len(), 0);
     }
 
@@ -662,7 +675,11 @@ mod tests {
     fn test_git_hook_excludes_nix_flake_check() {
         let task = make_task_with_profiles("nix-flake-check", vec!["manual"]);
         let node = make_node("root", vec![task]);
-        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("git-hook"))).unwrap();
+        let plan = build_plan(
+            &[node],
+            &req_with_profile(Phase::Verify, RunMode::Full, Some("git-hook")),
+        )
+        .unwrap();
         assert_eq!(plan.items.len(), 0);
     }
 
@@ -670,7 +687,11 @@ mod tests {
     fn test_pre_push_includes_cargo_check() {
         let task = make_task_with_profiles("cargo-check", vec!["pre-push", "manual"]);
         let node = make_node("root", vec![task]);
-        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("pre-push"))).unwrap();
+        let plan = build_plan(
+            &[node],
+            &req_with_profile(Phase::Verify, RunMode::Full, Some("pre-push")),
+        )
+        .unwrap();
         assert_eq!(plan.items.len(), 1);
     }
 
@@ -678,7 +699,11 @@ mod tests {
     fn test_pre_push_includes_cargo_clippy() {
         let task = make_task_with_profiles("cargo-clippy", vec!["pre-push", "manual"]);
         let node = make_node("root", vec![task]);
-        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("pre-push"))).unwrap();
+        let plan = build_plan(
+            &[node],
+            &req_with_profile(Phase::Verify, RunMode::Full, Some("pre-push")),
+        )
+        .unwrap();
         assert_eq!(plan.items.len(), 1);
     }
 
@@ -686,7 +711,11 @@ mod tests {
     fn test_nix_check_includes_cargo_test() {
         let task = make_task_with_profiles("cargo-test", vec!["nix-check", "manual"]);
         let node = make_node("root", vec![task]);
-        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("nix-check"))).unwrap();
+        let plan = build_plan(
+            &[node],
+            &req_with_profile(Phase::Verify, RunMode::Full, Some("nix-check")),
+        )
+        .unwrap();
         assert_eq!(plan.items.len(), 1);
     }
 
@@ -694,7 +723,11 @@ mod tests {
     fn test_nix_check_excludes_nix_flake_check() {
         let task = make_task_with_profiles("nix-flake-check", vec!["manual"]);
         let node = make_node("root", vec![task]);
-        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("nix-check"))).unwrap();
+        let plan = build_plan(
+            &[node],
+            &req_with_profile(Phase::Verify, RunMode::Full, Some("nix-check")),
+        )
+        .unwrap();
         assert_eq!(plan.items.len(), 0);
     }
 
@@ -702,7 +735,11 @@ mod tests {
     fn test_manual_includes_nix_flake_check() {
         let task = make_task_with_profiles("nix-flake-check", vec!["manual"]);
         let node = make_node("root", vec![task]);
-        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("manual"))).unwrap();
+        let plan = build_plan(
+            &[node],
+            &req_with_profile(Phase::Verify, RunMode::Full, Some("manual")),
+        )
+        .unwrap();
         assert_eq!(plan.items.len(), 1);
     }
 
@@ -711,16 +748,28 @@ mod tests {
         // Fix profile tasks use Phase::Fix and allow mutating
         let task = make_task_with_profiles_and_phase("rustfmt-fix", vec!["fix"], Phase::Fix, true);
         let node = make_node("root", vec![task]);
-        let plan = build_plan(&[node], &req_with_profile(Phase::Fix, RunMode::Full, Some("fix"))).unwrap();
+        let plan = build_plan(
+            &[node],
+            &req_with_profile(Phase::Fix, RunMode::Full, Some("fix")),
+        )
+        .unwrap();
         assert_eq!(plan.items.len(), 1);
     }
 
     #[test]
     fn test_mutating_task_refused_in_verify_with_profile() {
         // Even with a profile, mutating tasks are refused in verify phase
-        let task = make_task_with_profiles_and_phase("mutating-task", vec!["nix-check"], Phase::Verify, true);
+        let task = make_task_with_profiles_and_phase(
+            "mutating-task",
+            vec!["nix-check"],
+            Phase::Verify,
+            true,
+        );
         let node = make_node("root", vec![task]);
-        let result = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("nix-check")));
+        let result = build_plan(
+            &[node],
+            &req_with_profile(Phase::Verify, RunMode::Full, Some("nix-check")),
+        );
         assert!(result.is_err());
         match result {
             Err(PlanError::MutatingRefused(id)) => assert_eq!(id, "mutating-task"),
@@ -738,10 +787,18 @@ mod tests {
         );
         let node = make_node("root", vec![task]);
         // Task with no profiles should match when profile is "manual"
-        let plan = build_plan(&[node.clone()], &req_with_profile(Phase::Verify, RunMode::Full, Some("manual"))).unwrap();
+        let plan = build_plan(
+            &[node.clone()],
+            &req_with_profile(Phase::Verify, RunMode::Full, Some("manual")),
+        )
+        .unwrap();
         assert_eq!(plan.items.len(), 1);
         // Task with no profiles should NOT match when profile is "git-hook"
-        let plan2 = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("git-hook"))).unwrap();
+        let plan2 = build_plan(
+            &[node],
+            &req_with_profile(Phase::Verify, RunMode::Full, Some("git-hook")),
+        )
+        .unwrap();
         assert_eq!(plan2.items.len(), 0);
     }
 
@@ -749,7 +806,11 @@ mod tests {
     fn test_unknown_profile_results_in_empty_plan() {
         let task = make_task_with_profiles("cargo-check", vec!["manual"]);
         let node = make_node("root", vec![task]);
-        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("non-existent"))).unwrap();
+        let plan = build_plan(
+            &[node],
+            &req_with_profile(Phase::Verify, RunMode::Full, Some("non-existent")),
+        )
+        .unwrap();
         assert_eq!(plan.items.len(), 0);
     }
 
@@ -848,7 +909,10 @@ mod tests {
             }),
         };
         let merged = merge_context(&node, None);
-        assert_eq!(merged.shell.as_ref().unwrap().name.as_deref(), Some("default"));
+        assert_eq!(
+            merged.shell.as_ref().unwrap().name.as_deref(),
+            Some("default")
+        );
     }
 
     #[test]
@@ -875,7 +939,13 @@ mod tests {
         let plan = build_plan(&[node], &req(Phase::Verify, RunMode::Full)).unwrap();
         assert_eq!(plan.items.len(), 1);
         assert_eq!(
-            plan.items[0].context.shell.as_ref().unwrap().name.as_deref(),
+            plan.items[0]
+                .context
+                .shell
+                .as_ref()
+                .unwrap()
+                .name
+                .as_deref(),
             Some("test")
         );
     }

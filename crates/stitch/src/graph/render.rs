@@ -7,10 +7,7 @@ pub enum RenderFormat {
     Mermaid,
 }
 
-pub fn render_graph_derive(
-    graph: &WorkspaceDag,
-    format: RenderFormat,
-) -> Result<String, String> {
+pub fn render_graph_derive(graph: &WorkspaceDag, format: RenderFormat) -> Result<String, String> {
     match format {
         RenderFormat::Json => render_graph_json(graph),
         RenderFormat::Text => render_graph_text(graph),
@@ -53,7 +50,10 @@ fn render_graph_text(graph: &WorkspaceDag) -> Result<String, String> {
             .unwrap_or_else(|| "no layer".to_string());
         let kind = node_kind_name(&node.kind);
         let root = if node.is_root { " [ROOT]" } else { "" };
-        out.push_str(&format!("  {:<20} {:<12} kind={}{root}\n", node.id, layer, kind));
+        out.push_str(&format!(
+            "  {:<20} {:<12} kind={}{root}\n",
+            node.id, layer, kind
+        ));
     }
 
     if graph.edges.is_empty() {
@@ -209,7 +209,12 @@ fn mermaid_label(node: &super::WorkspaceNode) -> String {
         .layer
         .map(|l| format!("layer {l}"))
         .unwrap_or_else(|| "no layer".to_string());
-    format!("{}<br/>{}<br/>{}", node.id, layer, node_kind_name(&node.kind))
+    format!(
+        "{}<br/>{}<br/>{}",
+        node.id,
+        layer,
+        node_kind_name(&node.kind)
+    )
 }
 
 fn node_kind_name(kind: &super::NodeKind) -> &'static str {

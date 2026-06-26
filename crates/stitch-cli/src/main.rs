@@ -85,7 +85,9 @@ fn cmd_graph(command: &GraphCliCommand) -> Result<(), String> {
             format,
         } => {
             let root = std::path::Path::new(workspace);
-            let meta_path = metadata.as_ref().map(|p| std::path::Path::new(p).to_path_buf());
+            let meta_path = metadata
+                .as_ref()
+                .map(|p| std::path::Path::new(p).to_path_buf());
             let meta_ref = meta_path.as_deref();
 
             let graph = stitch::graph::derive::derive_graph_from_locks(root, meta_ref)
@@ -104,15 +106,15 @@ fn cmd_graph(command: &GraphCliCommand) -> Result<(), String> {
             format,
         } => {
             let root = std::path::Path::new(workspace);
-            let meta_path = metadata.as_ref().map(|p| std::path::Path::new(p).to_path_buf());
+            let meta_path = metadata
+                .as_ref()
+                .map(|p| std::path::Path::new(p).to_path_buf());
             let meta_ref = meta_path.as_deref();
 
             let graph = stitch::graph::derive::derive_graph_from_locks(root, meta_ref)
                 .map_err(|e| format!("Graph derivation failed: {e}"))?;
 
-            let opts = stitch::graph::ValidateOptions {
-                strict: *strict,
-            };
+            let opts = stitch::graph::ValidateOptions { strict: *strict };
             let report = stitch::graph::validate::validate_graph(&graph, &opts);
             let fmt = parse_format(format);
             let output = stitch::graph::render::render_validation_report(&report, fmt)?;
@@ -131,7 +133,9 @@ fn cmd_graph(command: &GraphCliCommand) -> Result<(), String> {
             format,
         } => {
             let root = std::path::Path::new(workspace);
-            let meta_path = metadata.as_ref().map(|p| std::path::Path::new(p).to_path_buf());
+            let meta_path = metadata
+                .as_ref()
+                .map(|p| std::path::Path::new(p).to_path_buf());
             let meta_ref = meta_path.as_deref();
 
             let graph = stitch::graph::derive::derive_graph_from_locks(root, meta_ref)
@@ -152,7 +156,9 @@ fn cmd_graph(command: &GraphCliCommand) -> Result<(), String> {
             format,
         } => {
             let root = std::path::Path::new(workspace);
-            let meta_path = metadata.as_ref().map(|p| std::path::Path::new(p).to_path_buf());
+            let meta_path = metadata
+                .as_ref()
+                .map(|p| std::path::Path::new(p).to_path_buf());
             let meta_ref = meta_path.as_deref();
 
             let graph = stitch::graph::derive::derive_graph_from_locks(root, meta_ref)
@@ -334,7 +340,11 @@ enum Commands {
         messages: Option<String>,
         #[arg(long, help = "Write .stitch/messages.json and exit")]
         write_template: bool,
-        #[arg(short = 'm', long = "message", help = "Commit message; only valid with --repo")]
+        #[arg(
+            short = 'm',
+            long = "message",
+            help = "Commit message; only valid with --repo"
+        )]
         message: Option<String>,
         #[arg(long, help = "Repo name")]
         repo: Option<String>,
@@ -348,7 +358,11 @@ enum Commands {
     },
     /// Sync/update/push in dependency order (update flake inputs, validate, push)
     Sync {
-        #[arg(long, default_value = "push", help = "Mode: push (pull/rebase planned)")]
+        #[arg(
+            long,
+            default_value = "push",
+            help = "Mode: push (pull/rebase planned)"
+        )]
         mode: Option<String>,
         #[arg(long, help = "Apply (required for actual sync operations)")]
         apply: bool,
@@ -391,7 +405,11 @@ enum GraphCliCommand {
         source: String,
         #[arg(long, help = "Path to workspace metadata file")]
         metadata: Option<String>,
-        #[arg(long, default_value = "text", help = "Output format: text, json, mermaid")]
+        #[arg(
+            long,
+            default_value = "text",
+            help = "Output format: text, json, mermaid"
+        )]
         format: String,
     },
     /// Validate workspace graph topology
@@ -426,7 +444,11 @@ enum GraphCliCommand {
         source: String,
         #[arg(long, help = "Path to workspace metadata file")]
         metadata: Option<String>,
-        #[arg(long, default_value = "mermaid", help = "Output format: mermaid, json, text")]
+        #[arg(
+            long,
+            default_value = "mermaid",
+            help = "Output format: mermaid, json, text"
+        )]
         format: String,
     },
 }
@@ -437,7 +459,11 @@ enum TopologyCommand {
     Check {
         #[arg(long, default_value = ".", help = "Root workspace path")]
         workspace: String,
-        #[arg(long, default_value = ".stitch/topology.json", help = "Path to topology config")]
+        #[arg(
+            long,
+            default_value = ".stitch/topology.json",
+            help = "Path to topology config"
+        )]
         config: String,
         #[arg(long, default_value = "text", help = "Output format: text, json")]
         format: String,
@@ -446,9 +472,17 @@ enum TopologyCommand {
     Graph {
         #[arg(long, default_value = ".", help = "Root workspace path")]
         workspace: String,
-        #[arg(long, default_value = ".stitch/topology.json", help = "Path to topology config")]
+        #[arg(
+            long,
+            default_value = ".stitch/topology.json",
+            help = "Path to topology config"
+        )]
         config: String,
-        #[arg(long, default_value = "mermaid", help = "Output format: mermaid, json, text")]
+        #[arg(
+            long,
+            default_value = "mermaid",
+            help = "Output format: mermaid, json, text"
+        )]
         format: String,
     },
 }
@@ -921,11 +955,9 @@ fn cmd_commit(
                 serde_json::json!({ "subject": "", "body": "", "files": diff }),
             );
         }
-        let cwd = std::env::current_dir()
-            .map_err(|e| format!("Cannot get cwd: {}", e))?;
+        let cwd = std::env::current_dir().map_err(|e| format!("Cannot get cwd: {}", e))?;
         let msg_dir = cwd.join(".stitch");
-        std::fs::create_dir_all(&msg_dir)
-            .map_err(|e| format!("Create .stitch dir: {}", e))?;
+        std::fs::create_dir_all(&msg_dir).map_err(|e| format!("Create .stitch dir: {}", e))?;
         let out_path = msg_dir.join("messages.json");
         let content = serde_json::to_string_pretty(&serde_json::json!({ "messages": template }))
             .map_err(|e| format!("Serialize: {}", e))?;
@@ -949,7 +981,8 @@ fn cmd_commit(
         plan.actions.retain(|action| action.node() == selected_repo);
         plan.node_plans.retain(|node, _| node == selected_repo);
         plan.affected_nodes.retain(|node| node == selected_repo);
-        plan.blocked_reasons.retain(|reason| reason.starts_with(&format!("{}:", selected_repo)));
+        plan.blocked_reasons
+            .retain(|reason| reason.starts_with(&format!("{}:", selected_repo)));
 
         if plan.actions.is_empty() {
             return Err(format!("Repo '{}' has no commit actions", selected_repo));
@@ -965,7 +998,9 @@ fn cmd_commit(
     if repo.is_none() {
         if let Some(m) = message.clone() {
             if plan.actions.len() != 1 {
-                return Err("--message requires --repo when more than one repo has changes".to_string());
+                return Err(
+                    "--message requires --repo when more than one repo has changes".to_string(),
+                );
             }
 
             let node = plan.actions[0].node().clone();
@@ -1007,10 +1042,7 @@ fn cmd_commit(
 
     if !apply {
         println!("{}", sync::format_plan_output(&plan, json_output));
-        return Err(
-            "Set --apply to execute the commit, or use --dry-run to preview."
-                .to_string(),
-        );
+        return Err("Set --apply to execute the commit, or use --dry-run to preview.".to_string());
     }
 
     {
@@ -1054,7 +1086,8 @@ fn cmd_sync(
     let dag = graph::discover_graph(&cfg)?;
     let statuses = status::collect_all(&cfg)?;
     let mut plan = sync::plan_sync(&dag, &statuses, &cfg)?;
-    plan.actions.retain(|a| !matches!(a, sync::Action::Commit { .. }));
+    plan.actions
+        .retain(|a| !matches!(a, sync::Action::Commit { .. }));
 
     if dry_run {
         println!("{}", sync::format_plan_output(&plan, json_output));
@@ -1068,15 +1101,10 @@ fn cmd_sync(
 
     if !apply {
         println!("{}", sync::format_plan_output(&plan, json_output));
-        return Err(
-            "Set --apply to execute the sync, or use --dry-run to preview."
-                .to_string(),
-        );
+        return Err("Set --apply to execute the sync, or use --dry-run to preview.".to_string());
     }
 
     let result = sync::execute_sync(&plan, &dag, &cfg, no_push, None, false)?;
     println!("{}", sync::format_result_output(&result, json_output));
     Ok(())
 }
-
-

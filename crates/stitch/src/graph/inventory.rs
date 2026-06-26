@@ -18,7 +18,10 @@ pub struct WorkspaceDiscovery {
     pub metadata_path: Option<PathBuf>,
 }
 
-pub fn discover_inventory(root: &Path, metadata_path: Option<&Path>) -> Result<WorkspaceDiscovery, String> {
+pub fn discover_inventory(
+    root: &Path,
+    metadata_path: Option<&Path>,
+) -> Result<WorkspaceDiscovery, String> {
     let mut nodes = BTreeMap::new();
 
     // Parse .gitmodules
@@ -384,7 +387,10 @@ mod tests {
     fn test_role_to_kind_roundtrip() {
         assert_eq!(role_to_kind(RepoRole::Pins), NodeKind::Pins);
         assert_eq!(role_to_kind(RepoRole::Producer), NodeKind::ToolProvider);
-        assert_eq!(role_to_kind(RepoRole::PkgsAggregator), NodeKind::PackageProvider);
+        assert_eq!(
+            role_to_kind(RepoRole::PkgsAggregator),
+            NodeKind::PackageProvider
+        );
         assert_eq!(role_to_kind(RepoRole::Consumer), NodeKind::HostConsumer);
         assert_eq!(role_to_kind(RepoRole::Root), NodeKind::WorkspaceRoot);
         assert_eq!(role_to_kind(RepoRole::External), NodeKind::External);
@@ -394,7 +400,10 @@ mod tests {
     fn test_kind_to_role_roundtrip() {
         assert_eq!(kind_to_role(NodeKind::Pins), RepoRole::Pins);
         assert_eq!(kind_to_role(NodeKind::ToolProvider), RepoRole::Producer);
-        assert_eq!(kind_to_role(NodeKind::PackageProvider), RepoRole::PkgsAggregator);
+        assert_eq!(
+            kind_to_role(NodeKind::PackageProvider),
+            RepoRole::PkgsAggregator
+        );
         assert_eq!(kind_to_role(NodeKind::HostConsumer), RepoRole::Consumer);
         assert_eq!(kind_to_role(NodeKind::WorkspaceRoot), RepoRole::Root);
         assert_eq!(kind_to_role(NodeKind::External), RepoRole::External);

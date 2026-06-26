@@ -29,18 +29,17 @@ pub struct Locked {
 }
 
 pub fn parse_flake_lock(path: &Path) -> Result<FlakeLock, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("Read {path:?}: {e}"))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Parse {path:?}: {e}"))
+    let content = std::fs::read_to_string(path).map_err(|e| format!("Read {path:?}: {e}"))?;
+    serde_json::from_str(&content).map_err(|e| format!("Parse {path:?}: {e}"))
 }
 
 pub fn input_target_name(value: &serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::String(s) => Some(s.clone()),
-        serde_json::Value::Array(parts) => {
-            parts.iter().rev().find_map(|v| v.as_str().map(str::to_owned))
-        }
+        serde_json::Value::Array(parts) => parts
+            .iter()
+            .rev()
+            .find_map(|v| v.as_str().map(str::to_owned)),
         _ => None,
     }
 }
@@ -83,7 +82,9 @@ fn path_basename(path: &str) -> Option<String> {
 }
 
 /// Build a set of aliases for a workspace node id to help with lock matching.
-pub fn build_workspace_aliases(nodes: &BTreeMap<String, super::WorkspaceNode>) -> BTreeMap<String, String> {
+pub fn build_workspace_aliases(
+    nodes: &BTreeMap<String, super::WorkspaceNode>,
+) -> BTreeMap<String, String> {
     let mut aliases = BTreeMap::new();
 
     for (id, node) in nodes {
@@ -222,8 +223,14 @@ mod tests {
 
         let root_node = lock.nodes.get("root").unwrap();
         let inputs = root_node.inputs.as_ref().unwrap();
-        assert_eq!(inputs.get("phenix-pins").and_then(|v| v.as_str()), Some("phenix-pins"));
-        assert_eq!(inputs.get("nixpkgs").and_then(|v| v.as_str()), Some("nixpkgs"));
+        assert_eq!(
+            inputs.get("phenix-pins").and_then(|v| v.as_str()),
+            Some("phenix-pins")
+        );
+        assert_eq!(
+            inputs.get("nixpkgs").and_then(|v| v.as_str()),
+            Some("nixpkgs")
+        );
 
         let pins = lock.nodes.get("phenix-pins").unwrap();
         let locked = pins.locked.as_ref().unwrap();
@@ -269,9 +276,9 @@ mod tests {
 
     #[test]
     fn test_build_workspace_aliases() {
+        use crate::graph::{NodeKind, RepoRole, WorkspaceNode};
         use std::collections::BTreeMap;
         use std::path::PathBuf;
-        use crate::graph::{NodeKind, RepoRole, WorkspaceNode};
 
         let mut nodes = BTreeMap::new();
         nodes.insert(

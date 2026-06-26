@@ -18,7 +18,9 @@ pub use inventory::{discover_inventory, InventoryOptions, WorkspaceDiscovery};
 pub use lock::parse_flake_lock;
 pub use render::RenderFormat;
 pub use topo::provider_before_consumer_order;
-pub use validate::{validate_graph, DiagnosticSeverity, GraphDiagnostic, GraphValidationReport, ValidateOptions};
+pub use validate::{
+    validate_graph, DiagnosticSeverity, GraphDiagnostic, GraphValidationReport, ValidateOptions,
+};
 
 // ---------------------------------------------------------------------------
 // Lock-derived graph types (new subsystem)
