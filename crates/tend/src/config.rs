@@ -77,6 +77,6 @@ pub fn resolve_node(
     }
 }
 
-pub fn default_mutates(phase: &str) -> bool {
-    matches!(phase, "generate" | "fix" | "setup" | "cleanup")
+pub fn default_mutates(phase: &crate::model::Phase) -> bool {
+    phase.is_mutating()
 }

@@ -9,7 +9,7 @@ pub struct ExecutionResult {
     pub task_id: String,
     pub description: String,
     pub kind: String,
-    pub phase: String,
+    pub phase: crate::model::Phase,
     pub passed: bool,
     pub skipped: bool,
     pub reason: String,
@@ -67,19 +67,26 @@ pub fn execute_plan(items: &[PlanItem], _root: &Path) -> Vec<ExecutionResult> {
 
         let check_result = checks::dispatch_kind(step, &workdir, env);
 
-        let failed = !check_result.passed && !check_result.skipped;
+        let failed = check_result.outcome.is_failure();
         if failed {
             failed_chains.insert(item.chain_id.clone());
         }
+
+        let (passed, skipped, reason) = match &check_result.outcome {
+            checks::CheckOutcome::Passed => (true, false, String::new()),
+            checks::CheckOutcome::Skipped { reason } => (true, true, reason.clone()),
+            checks::CheckOutcome::Failed { reason } => (false, false, reason.clone()),
+            checks::CheckOutcome::Errored { reason } => (false, false, reason.clone()),
+        };
 
         results.push(ExecutionResult {
             task_id: item.task_id.clone(),
             description: item.description.clone(),
             kind: item.kind.clone(),
-            phase: item.phase.clone(),
-            passed: check_result.passed,
-            skipped: check_result.skipped,
-            reason: check_result.reason,
+            phase: item.phase,
+            passed,
+            skipped,
+            reason,
             stdout: check_result.stdout,
             stderr: check_result.stderr,
         });

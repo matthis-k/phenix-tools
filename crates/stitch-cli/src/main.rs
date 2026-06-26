@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use clap::{Parser, Subcommand};
 
+use tend::model::{Phase, RunMode};
 use stitch::config;
 use stitch::git;
 use stitch::graph;
@@ -652,7 +653,7 @@ fn cmd_commit(
         let root = std::env::current_dir().unwrap_or_default();
         if let Ok(discovered) = tend::discover::discover_configs(&root, None) {
             let nodes = tend::discover::resolve_nodes(&root, discovered);
-            if let Ok(plan) = tend::planner::build_plan(&nodes, "verify", "changed", None) {
+            if let Ok(plan) = tend::planner::build_plan(&nodes, Phase::Verify, RunMode::Changed, None) {
                 let results = tend::execute::execute_plan(&plan.items, &root);
                 let failures: Vec<_> = results.iter().filter(|r| !r.passed && !r.skipped).collect();
                 if !failures.is_empty() {

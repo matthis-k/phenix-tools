@@ -1,10 +1,12 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use clap::{Parser, Subcommand};
 
 use tend::config;
 use tend::discover;
 use tend::execute;
+use tend::model::{Phase, RunMode};
 use tend::planner;
 use tend::report;
 
@@ -104,7 +106,15 @@ fn main() {
         Commands::Plan { mode, group, target, base: _, json, files } => {
             cmd_plan(&root, configs.as_deref(), &mode, group.as_deref(), target.as_deref(), &files, json)
         },
-        Commands::Run { phase, mode } => cmd_run(&root, configs.as_deref(), &phase, &mode),
+        Commands::Run { phase, mode } => {
+            match Phase::from_str(&phase) {
+                Ok(p) => match RunMode::from_str(&mode) {
+                    Ok(m) => cmd_run(&root, configs.as_deref(), p, m),
+                    Err(e) => Err(e),
+                },
+                Err(e) => Err(e),
+            }
+        },
         Commands::Verify { mode } => cmd_verify(&root, configs.as_deref(), &mode),
         Commands::Fix { mode } => cmd_fix(&root, configs.as_deref(), &mode),
         Commands::Generate { mode } => cmd_generate(&root, configs.as_deref(), &mode),
@@ -229,14 +239,14 @@ fn cmd_list(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> 
 fn cmd_run(
     root: &PathBuf,
     configs: Option<&[PathBuf]>,
-    phase: &str,
-    mode: &str,
+    phase: Phase,
+    mode: RunMode,
 ) -> Result<i32, String> {
     let discovered = discover::discover_configs(root, configs)
         .map_err(|e| format!("discovery failed: {e}"))?;
     let nodes = discover::resolve_nodes(root, discovered);
 
-    let changed_files = if mode == "changed" {
+    let changed_files = if mode == RunMode::Changed {
         Some(get_changed_files(root).unwrap_or_default())
     } else {
         None
@@ -270,12 +280,12 @@ fn cmd_verify(
     configs: Option<&[PathBuf]>,
     mode: &VerifyMode,
 ) -> Result<i32, String> {
-    let mode_str = match mode {
-        VerifyMode::Changed => "changed",
-        VerifyMode::Full => "full",
-        VerifyMode::Force => "force",
+    let run_mode = match mode {
+        VerifyMode::Changed => RunMode::Changed,
+        VerifyMode::Full => RunMode::Full,
+        VerifyMode::Force => RunMode::Force,
     };
-    cmd_run(root, configs, "verify", mode_str)
+    cmd_run(root, configs, Phase::Verify, run_mode)
 }
 
 fn cmd_fix(
@@ -283,11 +293,11 @@ fn cmd_fix(
     configs: Option<&[PathBuf]>,
     mode: &FixMode,
 ) -> Result<i32, String> {
-    let mode_str = match mode {
-        FixMode::Changed => "changed",
-        FixMode::All => "full",
+    let run_mode = match mode {
+        FixMode::Changed => RunMode::Changed,
+        FixMode::All => RunMode::Full,
     };
-    cmd_run(root, configs, "fix", mode_str)
+    cmd_run(root, configs, Phase::Fix, run_mode)
 }
 
 fn cmd_generate(
@@ -295,15 +305,15 @@ fn cmd_generate(
     configs: Option<&[PathBuf]>,
     mode: &FixMode,
 ) -> Result<i32, String> {
-    let mode_str = match mode {
-        FixMode::Changed => "changed",
-        FixMode::All => "full",
+    let run_mode = match mode {
+        FixMode::Changed => RunMode::Changed,
+        FixMode::All => RunMode::Full,
     };
-    cmd_run(root, configs, "generate", mode_str)
+    cmd_run(root, configs, Phase::Generate, run_mode)
 }
 
 fn cmd_gate(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> {
-    cmd_run(root, configs, "verify", "changed")
+    cmd_run(root, configs, Phase::Verify, RunMode::Changed)
 }
 
 fn cmd_status(root: &PathBuf, configs: Option<&[PathBuf]>, json: bool) -> Result<i32, String> {

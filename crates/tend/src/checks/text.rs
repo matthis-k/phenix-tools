@@ -178,8 +178,8 @@ mod tests {
         );
 
         let result = run_forbid(&step, dir.path());
-        assert!(!result.passed);
-        assert!(result.reason.contains("forbidden pattern"));
+        assert!(result.outcome.is_failure());
+        match &result.outcome { crate::checks::CheckOutcome::Failed { reason } => assert!(reason.contains("forbidden pattern")), _ => panic!("expected failure") }
     }
 
     #[test]
@@ -194,7 +194,7 @@ mod tests {
         );
 
         let result = run_forbid(&step, dir.path());
-        assert!(result.passed);
+        assert!(result.outcome.is_pass());
     }
 
     #[test]
@@ -213,7 +213,7 @@ mod tests {
         );
 
         let result = run_require(&step, dir.path());
-        assert!(result.passed);
+        assert!(result.outcome.is_pass());
     }
 
     #[test]
@@ -228,6 +228,6 @@ mod tests {
         );
 
         let result = run_require(&step, dir.path());
-        assert!(!result.passed);
+        assert!(result.outcome.is_failure());
     }
 }

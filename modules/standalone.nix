@@ -5,6 +5,7 @@
       version = "0.1.0";
       src = ../.;
       cargoLock.lockFile = ../Cargo.lock;
+      cargoBuildFlags = "-p pt-compat";
     };
     tendCliPkg = pkgs.rustPlatform.buildRustPackage {
       pname = "tend";

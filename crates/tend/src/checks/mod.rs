@@ -2,23 +2,29 @@ pub mod command;
 pub mod files;
 pub mod text;
 
+#[derive(Debug, Clone)]
+pub enum CheckOutcome {
+    Passed,
+    Failed { reason: String },
+    Skipped { reason: String },
+    Errored { reason: String },
+}
+
+impl CheckOutcome {
+    pub fn is_pass(&self) -> bool { matches!(self, Self::Passed) }
+    pub fn is_skip(&self) -> bool { matches!(self, Self::Skipped { .. }) }
+    pub fn is_failure(&self) -> bool { matches!(self, Self::Failed { .. } | Self::Errored { .. }) }
+}
+
 pub struct CheckResult {
-    pub passed: bool,
-    pub skipped: bool,
-    pub reason: String,
+    pub outcome: CheckOutcome,
     pub stdout: String,
     pub stderr: String,
 }
 
 impl CheckResult {
     pub fn pass_with(stdout: String, stderr: String) -> Self {
-        Self {
-            passed: true,
-            skipped: false,
-            reason: String::new(),
-            stdout,
-            stderr,
-        }
+        Self { outcome: CheckOutcome::Passed, stdout, stderr }
     }
 
     pub fn pass() -> Self {
@@ -26,33 +32,15 @@ impl CheckResult {
     }
 
     pub fn fail(reason: impl Into<String>) -> Self {
-        Self {
-            passed: false,
-            skipped: false,
-            reason: reason.into(),
-            stdout: String::new(),
-            stderr: String::new(),
-        }
+        Self { outcome: CheckOutcome::Failed { reason: reason.into() }, stdout: String::new(), stderr: String::new() }
     }
 
     pub fn skip() -> Self {
-        Self {
-            passed: true,
-            skipped: true,
-            reason: String::new(),
-            stdout: String::new(),
-            stderr: String::new(),
-        }
+        Self { outcome: CheckOutcome::Skipped { reason: String::new() }, stdout: String::new(), stderr: String::new() }
     }
 
     pub fn error(msg: impl Into<String>) -> Self {
-        Self {
-            passed: false,
-            skipped: false,
-            reason: msg.into(),
-            stdout: String::new(),
-            stderr: String::new(),
-        }
+        Self { outcome: CheckOutcome::Errored { reason: msg.into() }, stdout: String::new(), stderr: String::new() }
     }
 }
 

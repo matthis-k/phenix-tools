@@ -283,14 +283,15 @@ pub fn plan_commit(
         if plan.needs_code_commit {
             actions.push(Action::Commit {
                 node: node_id.clone(),
-                message: plan.message.clone(),
+                message: default_message(node_id, None),
             });
         }
         if plan.needs_input_sync {
+            let input_msg = input_sync_message(node_id, &plan.dependencies_to_update);
             actions.push(Action::UpdateInputs {
                 node: node_id.clone(),
                 updates: plan.dependencies_to_update.clone(),
-                message: plan.message.clone(),
+                message: input_msg,
             });
         }
     }

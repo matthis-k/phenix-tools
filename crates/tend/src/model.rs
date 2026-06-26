@@ -1,6 +1,86 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Phase {
+    Verify,
+    Fix,
+    Generate,
+    Setup,
+    Cleanup,
+}
+
+impl Phase {
+    pub fn is_mutating(self) -> bool {
+        matches!(self, Phase::Fix | Phase::Generate | Phase::Setup | Phase::Cleanup)
+    }
+}
+
+impl std::fmt::Display for Phase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Phase::Verify => write!(f, "verify"),
+            Phase::Fix => write!(f, "fix"),
+            Phase::Generate => write!(f, "generate"),
+            Phase::Setup => write!(f, "setup"),
+            Phase::Cleanup => write!(f, "cleanup"),
+        }
+    }
+}
+
+impl FromStr for Phase {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "verify" => Ok(Phase::Verify),
+            "fix" => Ok(Phase::Fix),
+            "generate" => Ok(Phase::Generate),
+            "setup" => Ok(Phase::Setup),
+            "cleanup" => Ok(Phase::Cleanup),
+            _ => Err(format!("Unknown phase: {s}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RunMode {
+    Changed,
+    Staged,
+    #[serde(alias = "all")]
+    Full,
+    Force,
+    Selected,
+}
+
+impl std::fmt::Display for RunMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RunMode::Changed => write!(f, "changed"),
+            RunMode::Staged => write!(f, "staged"),
+            RunMode::Full => write!(f, "full"),
+            RunMode::Force => write!(f, "force"),
+            RunMode::Selected => write!(f, "selected"),
+        }
+    }
+}
+
+impl FromStr for RunMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "changed" => Ok(RunMode::Changed),
+            "staged" => Ok(RunMode::Staged),
+            "full" | "all" => Ok(RunMode::Full),
+            "force" => Ok(RunMode::Force),
+            "selected" => Ok(RunMode::Selected),
+            _ => Err(format!("Unknown mode: {s}")),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TendConfig {
@@ -50,7 +130,7 @@ pub struct StepConfig {
 pub struct TaskConfig {
     pub id: String,
     pub description: Option<String>,
-    pub phase: String,
+    pub phase: Phase,
     pub kind: String,
     pub tags: Option<Vec<String>>,
     pub mutates: Option<bool>,

@@ -38,9 +38,7 @@ pub fn run(step: &Step, workdir: &Path, env: Option<&HashMap<String, String>>) -
         CheckResult::pass_with(stdout, stderr)
     } else {
         CheckResult {
-            passed: false,
-            skipped: false,
-            reason: format!("command exited with status {status} (expected {expected})"),
+            outcome: crate::checks::CheckOutcome::Failed { reason: format!("command exited with status {status} (expected {expected})") },
             stdout,
             stderr,
         }

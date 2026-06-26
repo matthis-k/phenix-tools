@@ -283,8 +283,14 @@ impl McpServer {
 
                         if meta.allowed_roots_only == Some(true) && !self.context.roots.roots().is_empty() {
                             let root_paths = extract_rootable_paths(arguments);
+                            let active_root = &self.context.roots.roots()[0];
                             for p in &root_paths {
-                                if let Err(e) = self.context.roots.validate_path(p) {
+                                let resolved = if p.is_relative() {
+                                    active_root.path.join(p)
+                                } else {
+                                    p.clone()
+                                };
+                                if let Err(e) = self.context.roots.validate_path(&resolved) {
                                     let failure = ToolFailure::new(
                                         crate::result::ErrorKind::RootViolation,
                                         &format!("Path '{}' is outside declared roots: {}", p.display(), e),

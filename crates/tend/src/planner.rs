@@ -28,7 +28,7 @@ pub struct PlanItem {
     pub chain_id: String,
     pub description: String,
     pub kind: String,
-    pub phase: String,
+    pub phase: Phase,
     pub step: Option<Step>,
     pub item_type: PlanItemType,
     pub context: ContextConfig,
@@ -48,16 +48,16 @@ pub struct Plan {
 
 pub fn build_plan(
     nodes: &[ResolvedNode],
-    phase: &str,
-    mode: &str,
+    phase: Phase,
+    mode: RunMode,
     changed_files: Option<&[String]>,
 ) -> Result<Plan, PlanError> {
-    let is_mutating_command = matches!(phase, "fix" | "generate");
+    let command_is_mutating = phase.is_mutating();
     let mut items = Vec::new();
 
     for node in nodes {
         let node_applies = node_applies(node, mode, changed_files);
-        if !node_applies && mode == "changed" {
+        if !node_applies && mode == RunMode::Changed {
             continue;
         }
 
@@ -80,7 +80,7 @@ pub fn build_plan(
                 chain_id: node.id.clone(),
                 description,
                 kind: step.kind.clone(),
-                phase: phase.to_string(),
+                phase,
                 step: Some(step),
                 item_type: PlanItemType::TaskBefore,
                 context: node.context.clone(),
@@ -92,13 +92,13 @@ pub fn build_plan(
                 continue;
             }
 
-            let task_applies = task_applies(task, mode, changed_files);
+            let applies = task_applies(task, mode, changed_files);
 
-            if mode == "changed" && !task_applies {
+            if mode == RunMode::Changed && !applies {
                 continue;
             }
 
-            if !task_applies && mode == "full" && !task.config.always.unwrap_or(false) {
+            if !applies && mode == RunMode::Full && !task.config.always.unwrap_or(false) {
                 continue;
             }
 
@@ -107,7 +107,7 @@ pub fn build_plan(
                 .mutates
                 .unwrap_or_else(|| config::default_mutates(&task.config.phase));
 
-            if !is_mutating_command && is_mutating {
+            if !command_is_mutating && is_mutating {
                 return Err(PlanError::MutatingRefused(task.config.id.clone()));
             }
 
@@ -122,7 +122,7 @@ pub fn build_plan(
                     chain_id: task_chain_id.clone(),
                     description: step.description.clone(),
                     kind: step.kind.clone(),
-                    phase: phase.to_string(),
+                    phase,
                     step: Some(step),
                     item_type: PlanItemType::TaskBefore,
                     context: node.context.clone(),
@@ -140,7 +140,7 @@ pub fn build_plan(
                     .clone()
                     .unwrap_or_default(),
                 kind: task.config.kind.clone(),
-                phase: phase.to_string(),
+                phase,
                 step: Some(Step {
                     kind: task.config.kind.clone(),
                     command: task.config.command.clone().unwrap_or_default(),
@@ -167,7 +167,7 @@ pub fn build_plan(
                     chain_id: task_chain_id.clone(),
                     description: step.description.clone(),
                     kind: step.kind.clone(),
-                    phase: phase.to_string(),
+                    phase,
                     step: Some(step),
                     item_type: PlanItemType::TaskAfter,
                     context: node.context.clone(),
@@ -194,8 +194,8 @@ pub fn build_plan(
                 chain_id: node.id.clone(),
                 description,
                 kind: step.kind.clone(),
-                phase: phase.to_string(),
-                step: Some(step),
+                    phase,
+                    step: Some(step),
                 item_type: PlanItemType::TaskAfter,
                 context: node.context.clone(),
             });
@@ -205,8 +205,8 @@ pub fn build_plan(
     Ok(Plan { items })
 }
 
-fn node_applies(node: &ResolvedNode, mode: &str, changed_files: Option<&[String]>) -> bool {
-    if mode == "force" {
+fn node_applies(node: &ResolvedNode, mode: RunMode, changed_files: Option<&[String]>) -> bool {
+    if mode == RunMode::Force {
         return true;
     }
 
@@ -232,12 +232,12 @@ fn node_applies(node: &ResolvedNode, mode: &str, changed_files: Option<&[String]
     task_matches_paths(&changed.paths, changed_files)
 }
 
-fn task_applies(task: &ResolvedTask, mode: &str, changed_files: Option<&[String]>) -> bool {
+fn task_applies(task: &ResolvedTask, mode: RunMode, changed_files: Option<&[String]>) -> bool {
     if task.config.always.unwrap_or(false) {
         return true;
     }
 
-    if mode == "force" {
+    if mode == RunMode::Force {
         return true;
     }
 
@@ -318,7 +318,7 @@ mod tests {
             config: TaskConfig {
                 id: "bad-task".to_string(),
                 description: None,
-                phase: "verify".to_string(),
+                phase: crate::model::Phase::Verify,
                 kind: "command".to_string(),
                 tags: None,
                 mutates: Some(true),
@@ -350,7 +350,7 @@ mod tests {
             tasks: vec![task],
         };
 
-        let result = build_plan(&[node], "verify", "full", None);
+        let result = build_plan(&[node], Phase::Verify, RunMode::Full, None);
         assert!(result.is_err());
         match result {
             Err(PlanError::MutatingRefused(id)) => assert_eq!(id, "bad-task"),
@@ -364,7 +364,7 @@ mod tests {
             config: TaskConfig {
                 id: "ok-task".to_string(),
                 description: None,
-                phase: "fix".to_string(),
+                phase: crate::model::Phase::Fix,
                 kind: "command".to_string(),
                 tags: None,
                 mutates: Some(true),
@@ -396,7 +396,7 @@ mod tests {
             tasks: vec![task],
         };
 
-        let result = build_plan(&[node], "fix", "full", None);
+        let result = build_plan(&[node], Phase::Fix, RunMode::Full, None);
         assert!(result.is_ok());
     }
 }

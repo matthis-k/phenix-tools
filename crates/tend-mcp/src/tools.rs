@@ -1,7 +1,10 @@
+use std::str::FromStr;
+
 use phenix_mcp_core::mcp::{McpTool, ToolContext};
 use phenix_mcp_core::result::{ErrorKind, ToolFailure, ToolResult};
 use phenix_mcp_core::types::{MutationLevel, ToolMetadata};
 use serde_json::{json, Value};
+use tend::model::{Phase, RunMode};
 
 fn mk_err(kind: ErrorKind, msg: &str, audit_id: &str) -> ToolFailure {
     ToolFailure::new(kind, msg, audit_id)
@@ -213,7 +216,8 @@ impl McpTool for TendRunTool {
         };
 
         let nodes: Vec<_> = pairs.into_iter().map(|(_, r)| r).collect();
-        let plan = match tend::planner::build_plan(&nodes, "verify", if mode == "all" { "force" } else { mode }, changed_files.as_deref()) {
+        let run_mode = RunMode::from_str(mode).unwrap_or(RunMode::Changed);
+        let plan = match tend::planner::build_plan(&nodes, Phase::Verify, if mode == "all" { RunMode::Force } else { run_mode }, changed_files.as_deref()) {
             Ok(p) => p,
             Err(e) => return Err(mk_err(ErrorKind::Internal, &format!("Plan: {}", e), &audit_id)),
         };
@@ -278,7 +282,7 @@ impl McpTool for TendExplainTool {
         };
 
         let nodes: Vec<_> = pairs.into_iter().map(|(_, r)| r).collect();
-        let plan = match tend::planner::build_plan(&nodes, "verify", "force", None) {
+        let plan = match tend::planner::build_plan(&nodes, Phase::Verify, RunMode::Force, None) {
             Ok(p) => p,
             Err(e) => return Err(mk_err(ErrorKind::Internal, &format!("Plan: {}", e), &audit_id)),
         };
