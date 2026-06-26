@@ -80,6 +80,8 @@ enum Commands {
     },
     /// Run the default non-mutating gate preset
     Gate,
+    /// Explain check failures: run verification and describe failures (CLI equivalent of tend.explain)
+    Explain,
 }
 
 #[derive(Subcommand, Clone, Debug)]
@@ -140,6 +142,7 @@ fn main() {
         Commands::Fix { mode } => cmd_fix(&root, configs.as_deref(), &mode),
         Commands::Generate { mode } => cmd_generate(&root, configs.as_deref(), &mode),
         Commands::Gate => cmd_gate(&root, configs.as_deref()),
+        Commands::Explain => cmd_explain(&root, configs.as_deref()),
     };
 
     match exit_code {
@@ -332,6 +335,57 @@ fn cmd_generate(
 
 fn cmd_gate(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> {
     cmd_run(root, configs, Phase::Verify, RunMode::Changed)
+}
+
+fn cmd_explain(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> {
+    let discovered = discover::discover_configs(root, configs)
+        .map_err(|e| format!("discovery failed: {e}"))?;
+    let nodes = discover::resolve_nodes(root, discovered);
+
+    let files = get_changed_files(root).unwrap_or_default();
+    let req = PlanRequest {
+        phase: Phase::Verify,
+        mode: RunMode::Changed,
+        group: None,
+        target: None,
+        files,
+    };
+
+    let plan = planner::build_plan(&nodes, &req).map_err(|e| format!("{e}"))?;
+
+    if plan.items.is_empty() {
+        println!("No checks to run. Workspace is clean.");
+        return Ok(0);
+    }
+
+    let result = execute::execute_plan(&plan.items, root);
+    let (failed, passed, skipped) = report::print_results(&result, false);
+
+    if failed > 0 {
+        println!();
+        println!("=== Explanation ===");
+        for item in &plan.items {
+            let outcome = result
+                .iter()
+                .find(|r| r.task_id == item.task_id)
+                .map(|r| &r.outcome);
+            match outcome {
+                Some(tend::checks::CheckOutcome::Failed { reason }) => {
+                    println!("FAILED: {}", item.task_id);
+                    println!("  Check: {} ({})", item.description, item.chain_id);
+                    println!("  Error: {}", reason);
+                    println!("  Suggestion: Run `tend run --phase verify --mode full` to re-run with full output.");
+                    println!();
+                }
+                _ => {}
+            }
+        }
+        eprintln!("{} failed, {} passed, {} skipped", failed, passed, skipped);
+        Ok(1)
+    } else {
+        println!("All checks passed ({} passed, {} skipped)", passed, skipped);
+        Ok(0)
+    }
 }
 
 fn cmd_status(root: &PathBuf, configs: Option<&[PathBuf]>, json: bool) -> Result<i32, String> {

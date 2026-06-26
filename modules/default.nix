@@ -1,12 +1,5 @@
 { ... }: {
   perSystem = { config, pkgs, ... }: let
-    tools = pkgs.rustPlatform.buildRustPackage {
-      pname = "phenix-tools";
-      version = "0.1.0";
-      src = ../.;
-      cargoLock.lockFile = ../Cargo.lock;
-      cargoBuildFlags = "-p pt-compat";
-    };
     stitchCliPkg = pkgs.rustPlatform.buildRustPackage {
       pname = "stitch";
       version = "0.1.0";
@@ -16,7 +9,6 @@
     };
   in {
     packages.stitch = stitchCliPkg;
-    packages.default = tools;
 
     apps.stitch = {
       type = "app";
@@ -24,7 +16,7 @@
     };
     apps.default = {
       type = "app";
-      program = "${tools}/bin/pt";
+      program = "${stitchCliPkg}/bin/stitch";
     };
   };
 }

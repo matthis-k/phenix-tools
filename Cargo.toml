@@ -7,6 +7,5 @@ members = [
   "crates/stitch-cli",
   "crates/stitch-mcp",
   "crates/phenix-mcp-core",
-  "crates/pt-compat",
 ]
 resolver = "2"
