@@ -47,7 +47,8 @@ pub enum PlanReason {
     ChangedFile,
     Always,
     Force,
-    Explicit,
+    ExplicitSelection,
+    NoWhenCondition,
     BeforeAfter,
 }
 
@@ -57,7 +58,8 @@ impl std::fmt::Display for PlanReason {
             PlanReason::ChangedFile => write!(f, "matched changed file(s)"),
             PlanReason::Always => write!(f, "always-run"),
             PlanReason::Force => write!(f, "force mode"),
-            PlanReason::Explicit => write!(f, "explicit selection"),
+            PlanReason::ExplicitSelection => write!(f, "explicitly selected"),
+            PlanReason::NoWhenCondition => write!(f, "no when.changed condition"),
             PlanReason::BeforeAfter => write!(f, "before/after hook"),
         }
     }
@@ -157,14 +159,21 @@ pub fn build_plan(
             // Compute matched files for this task
             let matched = compute_matched_files(task, changed_ref);
 
+            let has_when_condition = task.config.when.as_ref()
+                .and_then(|w| w.changed.as_ref())
+                .map(|c| !c.paths.is_empty())
+                .unwrap_or(false);
+
             let reason = if mode == RunMode::Force {
                 PlanReason::Force
             } else if task.config.always.unwrap_or(false) {
                 PlanReason::Always
             } else if !matched.is_empty() {
                 PlanReason::ChangedFile
+            } else if !has_when_condition {
+                PlanReason::NoWhenCondition
             } else {
-                PlanReason::Explicit
+                PlanReason::ExplicitSelection
             };
 
             for step_cfg in task.config.before.iter().flatten() {
@@ -351,27 +360,7 @@ fn should_run_step(step: &Step) -> bool {
 }
 
 fn task_step_kind_from_config(cfg: &TaskConfig) -> crate::model::TaskKind {
-    use crate::model::TaskKind;
-    match cfg.kind.as_str() {
-        "filesExist" => TaskKind::FilesExist {
-            paths: cfg.paths.clone().unwrap_or_default(),
-        },
-        "filesAbsent" => TaskKind::FilesAbsent {
-            paths: cfg.paths.clone().unwrap_or_default(),
-        },
-        "forbidText" => TaskKind::ForbidText {
-            paths: cfg.paths.clone().unwrap_or_default(),
-            patterns: cfg.patterns.clone().unwrap_or_default(),
-        },
-        "requireText" => TaskKind::RequireText {
-            paths: cfg.paths.clone().unwrap_or_default(),
-            patterns: cfg.patterns.clone().unwrap_or_default(),
-        },
-        _ => TaskKind::Command {
-            command: cfg.command.clone().unwrap_or_default(),
-            expect: cfg.expect.clone(),
-        },
-    }
+    cfg.kind.clone()
 }
 
 pub fn task_matches_paths(patterns: &[String], changed_files: &[String]) -> bool {
@@ -429,32 +418,29 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_mutating_task_refused_in_verify() {
-        let task = ResolvedTask {
+    fn make_command_task(id: &str, phase: Phase, mutates: bool, command: Vec<String>) -> ResolvedTask {
+        ResolvedTask {
             config: TaskConfig {
-                id: "bad-task".to_string(),
+                id: id.to_string(),
                 description: None,
-                phase: crate::model::Phase::Verify,
-                kind: "command".to_string(),
+                phase,
+                kind: TaskKind::Command { command, expect: None },
                 tags: None,
-                mutates: Some(true),
+                mutates: Some(mutates),
                 when: None,
                 always: None,
                 before: None,
                 after: None,
-                command: Some(vec!["touch".to_string(), "/tmp/evil".to_string()]),
-                expect: None,
-                paths: None,
-                patterns: None,
             },
             parent_node_path: Path::new(".").to_path_buf(),
-        };
+        }
+    }
 
-        let node = ResolvedNode {
+    fn make_node(id: &str, tasks: Vec<ResolvedTask>) -> ResolvedNode {
+        ResolvedNode {
             config_path: Path::new(".tend.json").to_path_buf(),
             node_path: Path::new(".").to_path_buf(),
-            id: "root".to_string(),
+            id: id.to_string(),
             description: String::new(),
             tags: vec![],
             when: None,
@@ -464,9 +450,21 @@ mod tests {
             },
             before: vec![],
             after: vec![],
-            tasks: vec![task],
-        };
+            tasks,
+        }
+    }
 
+    #[test]
+    fn test_mutating_task_refused_in_verify() {
+        let node = make_node(
+            "root",
+            vec![make_command_task(
+                "bad-task",
+                Phase::Verify,
+                true,
+                vec!["touch".to_string(), "/tmp/evil".to_string()],
+            )],
+        );
         let result = build_plan(&[node], &req(Phase::Verify, RunMode::Full));
         assert!(result.is_err());
         match result {
@@ -477,42 +475,15 @@ mod tests {
 
     #[test]
     fn test_mutating_task_allowed_in_fix() {
-        let task = ResolvedTask {
-            config: TaskConfig {
-                id: "ok-task".to_string(),
-                description: None,
-                phase: crate::model::Phase::Fix,
-                kind: "command".to_string(),
-                tags: None,
-                mutates: Some(true),
-                when: None,
-                always: None,
-                before: None,
-                after: None,
-                command: Some(vec!["touch".to_string(), "/tmp/test".to_string()]),
-                expect: None,
-                paths: None,
-                patterns: None,
-            },
-            parent_node_path: Path::new(".").to_path_buf(),
-        };
-
-        let node = ResolvedNode {
-            config_path: Path::new(".tend.json").to_path_buf(),
-            node_path: Path::new(".").to_path_buf(),
-            id: "root".to_string(),
-            description: String::new(),
-            tags: vec![],
-            when: None,
-            context: ContextConfig {
-                workdir: None,
-                env: None,
-            },
-            before: vec![],
-            after: vec![],
-            tasks: vec![task],
-        };
-
+        let node = make_node(
+            "root",
+            vec![make_command_task(
+                "ok-task",
+                Phase::Fix,
+                true,
+                vec!["touch".to_string(), "/tmp/test".to_string()],
+            )],
+        );
         let result = build_plan(&[node], &req(Phase::Fix, RunMode::Full));
         assert!(result.is_ok());
     }

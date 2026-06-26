@@ -97,6 +97,38 @@ impl McpTool for TendStatusTool {
     }
 }
 
+#[derive(Deserialize, Default)]
+struct PlanInput {
+    #[serde(default)]
+    root: Option<String>,
+    #[serde(default)]
+    phase: Option<String>,
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    files: Vec<String>,
+    #[serde(default)]
+    groups: Vec<String>,
+    #[serde(default)]
+    targets: Vec<String>,
+    #[serde(default)]
+    json: bool,
+}
+
+impl PlanInput {
+    fn to_plan_request(&self, root: &std::path::Path) -> PlanRequest {
+        let mode = RunMode::from_str(self.mode.as_deref().unwrap_or("changed")).unwrap_or(RunMode::Changed);
+        let phase = Phase::from_str(self.phase.as_deref().unwrap_or("verify")).unwrap_or(Phase::Verify);
+        let mut files = self.files.clone();
+        if matches!(mode, RunMode::Changed | RunMode::Staged) && files.is_empty() {
+            files = get_changed_files(root);
+        }
+        let group = if self.groups.is_empty() { None } else { Some(self.groups[0].clone()) };
+        let target = if self.targets.is_empty() { None } else { Some(self.targets[0].clone()) };
+        PlanRequest { phase, mode, group, target, files }
+    }
+}
+
 pub struct TendPlanTool;
 
 impl McpTool for TendPlanTool {
@@ -117,25 +149,10 @@ impl McpTool for TendPlanTool {
     }
     fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolFailure> {
         let audit_id = ctx.audit.generate_id();
-        let root = input.get("root").and_then(|v| v.as_str()).map(std::path::PathBuf::from)
+        let typed: PlanInput = parse_tool_input(&input, &audit_id)?;
+        let root = typed.root.as_ref().map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        let mode_str = input.get("mode").and_then(|v| v.as_str()).unwrap_or("changed");
-        let phase_str = input.get("phase").and_then(|v| v.as_str()).unwrap_or("verify");
-
-        let mode = RunMode::from_str(mode_str).unwrap_or(RunMode::Changed);
-        let phase = Phase::from_str(phase_str).unwrap_or(Phase::Verify);
-
-        let changed_files = match mode {
-            RunMode::Changed | RunMode::Staged => Some(get_changed_files(&root)),
-            _ => None,
-        };
-
-        let explicit_files: Vec<String> = input.get("files")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
-            .unwrap_or_default();
-
-        let files = if !explicit_files.is_empty() { Some(explicit_files) } else { changed_files };
+        let req = typed.to_plan_request(&root);
 
         let pairs = match walk_tend_configs(&root) {
             Ok(p) => p,
@@ -143,8 +160,6 @@ impl McpTool for TendPlanTool {
         };
 
         let nodes: Vec<_> = pairs.into_iter().map(|(_, r)| r).collect();
-
-        let req = PlanRequest { phase, mode, group: None, target: None, files: files.unwrap_or_default() };
 
         let plan = match tend::planner::build_plan(&nodes, &req) {
             Ok(p) => p,
@@ -157,8 +172,8 @@ impl McpTool for TendPlanTool {
                 "group": item.chain_id.split('.').next().unwrap_or(&item.task_id),
                 "kind": item.step.kind.description(),
                 "phase": item.phase,
-                "reason": "planned",
-                "files": [],
+                "reason": item.reason.to_string(),
+                "files": item.matched_files,
                 "depends_on": []
             })
         }).collect();
@@ -173,6 +188,38 @@ impl McpTool for TendPlanTool {
 }
 
 pub struct TendRunTool;
+
+#[derive(Deserialize, Default)]
+struct RunInput {
+    #[serde(default)]
+    root: Option<String>,
+    #[serde(default)]
+    files: Vec<String>,
+    #[serde(default)]
+    groups: Vec<String>,
+    #[serde(default)]
+    targets: Vec<String>,
+    #[serde(default)]
+    phase: Option<String>,
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    fail_fast: bool,
+}
+
+impl RunInput {
+    fn to_plan_request(&self, root: &std::path::Path) -> PlanRequest {
+        let mode = RunMode::from_str(self.mode.as_deref().unwrap_or("changed")).unwrap_or(RunMode::Changed);
+        let phase = Phase::from_str(self.phase.as_deref().unwrap_or("verify")).unwrap_or(Phase::Verify);
+        let mut files = self.files.clone();
+        if matches!(mode, RunMode::Changed | RunMode::Staged) && files.is_empty() {
+            files = get_changed_files(root);
+        }
+        let group = if self.groups.is_empty() { None } else { Some(self.groups[0].clone()) };
+        let target = if self.targets.is_empty() { None } else { Some(self.targets[0].clone()) };
+        PlanRequest { phase, mode, group, target, files }
+    }
+}
 
 impl McpTool for TendRunTool {
     fn name(&self) -> &str { "tend.run" }
@@ -193,27 +240,18 @@ impl McpTool for TendRunTool {
     }
     fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolFailure> {
         let audit_id = ctx.audit.generate_id();
-        let root = input.get("root").and_then(|v| v.as_str()).map(std::path::PathBuf::from)
+        let typed: RunInput = parse_tool_input(&input, &audit_id)?;
+        let root = typed.root.as_ref().map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        let mode = input.get("mode").and_then(|v| v.as_str()).unwrap_or("changed");
-        let phase_str = input.get("phase").and_then(|v| v.as_str()).unwrap_or("verify");
-        let fail_fast = input.get("fail_fast").and_then(|v| v.as_bool()).unwrap_or(false);
-
-        let phase = Phase::from_str(phase_str).unwrap_or(Phase::Verify);
+        let fail_fast = typed.fail_fast;
+        let req = typed.to_plan_request(&root);
 
         let pairs = match walk_tend_configs(&root) {
             Ok(p) => p,
             Err(e) => return Err(mk_err(ErrorKind::NotFound, &format!("Discovery: {}", e), &audit_id)),
         };
 
-        let changed_files = match mode {
-            "changed" | "staged" => Some(get_changed_files(&root)),
-            _ => None,
-        };
-
         let nodes: Vec<_> = pairs.into_iter().map(|(_, r)| r).collect();
-        let run_mode = RunMode::from_str(mode).unwrap_or(RunMode::Changed);
-        let req = PlanRequest { phase, mode: run_mode, group: None, target: None, files: changed_files.unwrap_or_default() };
         let plan = match tend::planner::build_plan(&nodes, &req) {
             Ok(p) => p,
             Err(e) => return Err(mk_err(ErrorKind::Internal, &format!("Plan: {}", e), &audit_id)),

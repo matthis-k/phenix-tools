@@ -111,8 +111,26 @@ pub struct ChangedConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum WorkdirPolicy {
+    ConfigDir,
+    ProgramCwd,
+    Relative(String),
+}
+
+impl WorkdirPolicy {
+    pub fn resolve(&self, config_dir: &std::path::Path, fallback: &std::path::Path) -> std::path::PathBuf {
+        match self {
+            WorkdirPolicy::ConfigDir => config_dir.to_path_buf(),
+            WorkdirPolicy::ProgramCwd => std::env::current_dir().unwrap_or_else(|_| fallback.to_path_buf()),
+            WorkdirPolicy::Relative(suffix) => config_dir.join(suffix),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextConfig {
-    pub workdir: Option<String>,
+    pub workdir: Option<WorkdirPolicy>,
     pub env: Option<std::collections::HashMap<String, String>>,
 }
 
@@ -131,17 +149,14 @@ pub struct TaskConfig {
     pub id: String,
     pub description: Option<String>,
     pub phase: Phase,
-    pub kind: String,
+    #[serde(flatten)]
+    pub kind: TaskKind,
     pub tags: Option<Vec<String>>,
     pub mutates: Option<bool>,
     pub when: Option<WhenConfig>,
     pub always: Option<bool>,
     pub before: Option<Vec<StepConfig>>,
     pub after: Option<Vec<StepConfig>>,
-    pub command: Option<Vec<String>>,
-    pub expect: Option<ExpectConfig>,
-    pub paths: Option<Vec<String>>,
-    pub patterns: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,22 +164,28 @@ pub struct ExpectConfig {
     pub status: Option<i32>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
 pub enum TaskKind {
     Command {
         command: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         expect: Option<ExpectConfig>,
     },
+    #[serde(rename = "filesExist")]
     FilesExist {
         paths: Vec<String>,
     },
+    #[serde(rename = "filesAbsent")]
     FilesAbsent {
         paths: Vec<String>,
     },
+    #[serde(rename = "forbidText")]
     ForbidText {
         paths: Vec<String>,
         patterns: Vec<String>,
     },
+    #[serde(rename = "requireText")]
     RequireText {
         paths: Vec<String>,
         patterns: Vec<String>,
@@ -180,10 +201,6 @@ impl TaskKind {
             TaskKind::ForbidText { .. } => "forbidText",
             TaskKind::RequireText { .. } => "requireText",
         }
-    }
-
-    pub fn is_valid_kind(s: &str) -> bool {
-        matches!(s, "command" | "filesExist" | "filesAbsent" | "forbidText" | "requireText")
     }
 }
 

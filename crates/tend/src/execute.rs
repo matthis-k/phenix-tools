@@ -76,14 +76,9 @@ pub fn execute_plan(items: &[PlanItem], _root: &Path) -> Vec<ExecutionResult> {
 
 fn effective_workdir(item: &PlanItem, fallback: &Path) -> std::path::PathBuf {
     match &item.context.workdir {
-        Some(wd) if wd == "configDir" => {
-            item.config_path.parent().unwrap_or(fallback).to_path_buf()
-        }
-        Some(wd) if wd == "programCwd" => {
-            std::env::current_dir().unwrap_or_else(|_| fallback.to_path_buf())
-        }
-        Some(wd) => {
-            item.config_path.parent().unwrap_or(fallback).join(wd)
+        Some(policy) => {
+            let config_dir = item.config_path.parent().unwrap_or(fallback);
+            policy.resolve(config_dir, fallback)
         }
         None => item.config_path.parent().unwrap_or(fallback).to_path_buf(),
     }

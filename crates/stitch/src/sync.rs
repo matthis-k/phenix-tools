@@ -105,11 +105,13 @@ pub struct NodeJournalEntry {
     pub path: String,
     pub commit_sha: Option<String>,
     pub pushed: bool,
+    pub branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ActionState {
     Pending,
+    Running,
     Done,
     Failed,
 }
@@ -434,6 +436,7 @@ fn execute_plan(
                     path: node.path.to_string_lossy().to_string(),
                     commit_sha: None,
                     pushed: false,
+                    branch: Some(node.branch.clone()),
                 },
             );
         }
@@ -469,196 +472,31 @@ fn execute_plan(
     let mut push_results: BTreeMap<String, Result<(), String>> = BTreeMap::new();
 
     for (action_idx, action) in plan.actions.iter().enumerate() {
-        let mark_done = |journal: &mut TransactionJournal, sha: Option<String>, pushed: bool| {
-            if let Some(entry) = journal.actions.get_mut(action_idx) {
-                entry.state = ActionState::Done;
-                entry.commit_sha = sha;
-                entry.pushed = pushed;
-            }
-        };
+        // Mark Running before execution
+        if let Some(entry) = journal.actions.get_mut(action_idx) {
+            entry.state = ActionState::Running;
+        }
+        write_journal(&journal, cfg)?;
 
-        let mark_failed = |journal: &mut TransactionJournal, err: String| {
-            if let Some(entry) = journal.actions.get_mut(action_idx) {
-                entry.state = ActionState::Failed;
-                entry.error = Some(err);
-            }
-            journal.phase = JournalPhase::Failed;
-        };
+        let action_result = execute_single_action(
+            action, action_idx, &plan, &graph, cfg, no_push, messages, &mut commit_shas, &mut push_results, &mut journal,
+        );
 
-        match action {
-            Action::Commit { node: node_id, message } => {
-                let node = match graph.get_node(node_id) {
-                    Some(n) => n,
-                    None => continue,
-                };
-
-                let files = collect_all_changed_files(&node.path)?;
-                if files.is_empty() {
-                    return Err(format!("{} marked dirty but no changes found", node.name));
+        match action_result {
+            Ok(()) => {
+                if let Some(entry) = journal.actions.get_mut(action_idx) {
+                    entry.state = ActionState::Done;
                 }
-
-                let msg = messages
-                    .and_then(|m| m.get(node_id))
-                    .cloned()
-                    .unwrap_or_else(|| message.clone());
-
-                git::git_add(&node.path, &files)?;
-                let trailed = crate::model::add_trailers(&msg, &plan.transaction_id, &cfg.workspace);
-                git::git_commit(&node.path, &trailed)?;
-                let sha = git::git_head(&node.path)?;
-                commit_shas.insert(node_id.clone(), sha.clone());
-
-                if let Some(entry) = journal.nodes.get_mut(node_id) {
-                    entry.commit_sha = Some(sha.clone());
-                }
-                mark_done(&mut journal, Some(sha), false);
                 write_journal(&journal, cfg)?;
             }
-            Action::UpdateInputs { node: node_id, updates, message } => {
-                let node = match graph.get_node(node_id) {
-                    Some(n) => n,
-                    None => continue,
-                };
-
-                let updated_deps: Vec<InputUpdate> = updates
-                    .iter()
-                    .map(|u| {
-                        let rev = commit_shas.get(&u.dependency_node).cloned();
-                        InputUpdate {
-                            input_name: u.input_name.clone(),
-                            dependency_node: u.dependency_node.clone(),
-                            target_rev: rev,
-                        }
-                    })
-                    .collect();
-
-                if updated_deps.is_empty() {
-                    mark_done(&mut journal, None, false);
-                    write_journal(&journal, cfg)?;
-                    continue;
+            Err(err) => {
+                if let Some(entry) = journal.actions.get_mut(action_idx) {
+                    entry.state = ActionState::Failed;
+                    entry.error = Some(err.clone());
                 }
-
-                for update in &updated_deps {
-                    let target_rev = update.target_rev.as_deref().unwrap_or("HEAD");
-                    update_flake_lock_input(&node.path, &update.input_name, target_rev)?;
-                }
-
-                let lock_path = node.path.join("flake.lock");
-                if lock_path.exists() {
-                    let msg = messages
-                        .and_then(|m| m.get(node_id))
-                        .cloned()
-                        .unwrap_or_else(|| message.clone());
-
-                    git::git_add(&node.path, &[lock_path.to_string_lossy().to_string()])?;
-                    let trailed = crate::model::add_trailers(&msg, &plan.transaction_id, &cfg.workspace);
-                    git::git_commit(&node.path, &trailed)?;
-                    let sha = git::git_head(&node.path)?;
-                    commit_shas.insert(node_id.clone(), sha.clone());
-
-                    if let Some(entry) = journal.nodes.get_mut(node_id) {
-                        entry.commit_sha = Some(sha.clone());
-                    }
-                    mark_done(&mut journal, Some(sha), false);
-                    write_journal(&journal, cfg)?;
-                } else {
-                    mark_done(&mut journal, None, false);
-                    write_journal(&journal, cfg)?;
-                }
-            }
-            Action::Validate { node: node_id } => {
-                let plan_node = match plan.node_plans.get(node_id) {
-                    Some(p) => p,
-                    None => continue,
-                };
-                let node = match graph.get_node(node_id) {
-                    Some(n) => n,
-                    None => continue,
-                };
-
-                let repo = match git::GitRepo::open(&node.path) {
-                    Ok(r) => r,
-                    Err(_) => {
-                        mark_done(&mut journal, None, false);
-                        write_journal(&journal, cfg)?;
-                        continue;
-                    }
-                };
-                let status = repo.status()?;
-                if status.staged_count() > 0 {
-                    return Err(format!("Repo '{}' has uncommitted tracked changes after sync commit", node.name));
-                }
-
-                let lock_path = node.path.join("flake.lock");
-                if lock_path.exists() && plan_node.needs_input_sync {
-                    for update in &plan_node.dependencies_to_update {
-                        let expected_rev = commit_shas.get(&update.dependency_node);
-                        verify_lockfile_rev(&lock_path, &update.input_name, expected_rev.map(|s| s.as_str()))?;
-                    }
-                }
-
-                for cmd_parts in &plan_node.validation_commands {
-                    if cmd_parts.is_empty() {
-                        continue;
-                    }
-                    let output = std::process::Command::new(&cmd_parts[0])
-                        .args(&cmd_parts[1..])
-                        .current_dir(&node.path)
-                        .output()
-                        .map_err(|e| format!("Validation command failed: {}", e))?;
-                    if !output.status.success() {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        return Err(format!(
-                            "Validation failed in '{}': {} {}",
-                            node.name,
-                            cmd_parts.join(" "),
-                            stderr.trim()
-                        ));
-                    }
-                }
-
-                mark_done(&mut journal, None, false);
+                journal.phase = JournalPhase::Failed;
                 write_journal(&journal, cfg)?;
-            }
-            Action::Push { node: node_id } => {
-                if no_push {
-                    mark_done(&mut journal, None, false);
-                    write_journal(&journal, cfg)?;
-                    continue;
-                }
-
-                let node = match graph.get_node(node_id) {
-                    Some(n) => n,
-                    None => continue,
-                };
-
-                let result = git_push(&node.path, &node.branch);
-                if let Err(ref e) = result {
-                    mark_failed(&mut journal, e.clone());
-                    push_results.insert(node.name.clone(), Err(e.clone()));
-                    write_journal(&journal, cfg)?;
-                    let pushed_nodes: Vec<String> = push_results
-                        .iter()
-                        .filter(|(_, r)| r.is_ok())
-                        .map(|(name, _)| name.clone())
-                        .collect();
-                    let failed_nodes: Vec<String> = push_results
-                        .iter()
-                        .filter(|(_, r)| r.is_err())
-                        .map(|(name, _)| name.clone())
-                        .collect();
-                    return Err(format!(
-                        "Push failed for '{}': {}\nPushed: {}\nFailed: {}\nResume: stitch commit --resume {}",
-                        node.name, e, pushed_nodes.join(", "), failed_nodes.join(", "), plan.transaction_id
-                    ));
-                }
-
-                push_results.insert(node.name.clone(), Ok(()));
-                if let Some(entry) = journal.nodes.get_mut(node_id) {
-                    entry.pushed = true;
-                }
-                mark_done(&mut journal, None, true);
-                write_journal(&journal, cfg)?;
+                return Err(err);
             }
         }
     }
@@ -672,6 +510,194 @@ fn execute_plan(
         push_results,
         phase: JournalPhase::Completed,
     })
+}
+
+fn execute_single_action(
+    action: &Action,
+    _action_idx: usize,
+    plan: &ActionPlan,
+    graph: &WorkspaceGraph,
+    cfg: &WorkspaceConfig,
+    no_push: bool,
+    messages: Option<&BTreeMap<String, String>>,
+    commit_shas: &mut BTreeMap<NodeId, String>,
+    push_results: &mut BTreeMap<String, Result<(), String>>,
+    journal: &mut TransactionJournal,
+) -> Result<(), String> {
+    match action {
+        Action::Commit { node: node_id, message } => {
+            let node = match graph.get_node(node_id) {
+                Some(n) => n,
+                None => return Ok(()),
+            };
+
+            let files = collect_all_changed_files(&node.path)?;
+            if files.is_empty() {
+                return Err(format!("{} marked dirty but no changes found", node.name));
+            }
+
+            let msg = messages
+                .and_then(|m| m.get(node_id))
+                .cloned()
+                .unwrap_or_else(|| message.clone());
+
+            git::git_add(&node.path, &files)?;
+            let trailed = crate::model::add_trailers(&msg, &plan.transaction_id, &cfg.workspace);
+            git::git_commit(&node.path, &trailed)?;
+            let sha = git::git_head(&node.path)?;
+            commit_shas.insert(node_id.clone(), sha.clone());
+
+            if let Some(entry) = journal.nodes.get_mut(node_id) {
+                entry.commit_sha = Some(sha);
+            }
+            Ok(())
+        }
+        Action::UpdateInputs { node: node_id, updates, message } => {
+            let node = match graph.get_node(node_id) {
+                Some(n) => n,
+                None => return Ok(()),
+            };
+
+            let updated_deps: Vec<InputUpdate> = updates
+                .iter()
+                .map(|u| {
+                    let rev = commit_shas.get(&u.dependency_node).cloned();
+                    InputUpdate {
+                        input_name: u.input_name.clone(),
+                        dependency_node: u.dependency_node.clone(),
+                        target_rev: rev,
+                    }
+                })
+                .collect();
+
+            if updated_deps.is_empty() {
+                return Ok(());
+            }
+
+            for update in &updated_deps {
+                let target_rev = update.target_rev.as_deref().unwrap_or("HEAD");
+                update_flake_lock_input(&node.path, &update.input_name, target_rev)?;
+            }
+
+            let lock_path = node.path.join("flake.lock");
+            if lock_path.exists() {
+                let msg = messages
+                    .and_then(|m| m.get(node_id))
+                    .cloned()
+                    .unwrap_or_else(|| message.clone());
+
+                git::git_add(&node.path, &[lock_path.to_string_lossy().to_string()])?;
+                let trailed = crate::model::add_trailers(&msg, &plan.transaction_id, &cfg.workspace);
+                git::git_commit(&node.path, &trailed)?;
+                let sha = git::git_head(&node.path)?;
+                commit_shas.insert(node_id.clone(), sha.clone());
+
+                if let Some(entry) = journal.nodes.get_mut(node_id) {
+                    entry.commit_sha = Some(sha);
+                }
+            }
+            Ok(())
+        }
+        Action::Validate { node: node_id } => {
+            let plan_node = match plan.node_plans.get(node_id) {
+                Some(p) => p,
+                None => return Ok(()),
+            };
+            let node = match graph.get_node(node_id) {
+                Some(n) => n,
+                None => return Ok(()),
+            };
+
+            let repo = match git::GitRepo::open(&node.path) {
+                Ok(r) => r,
+                Err(_) => return Ok(()),
+            };
+            let status = repo.status()?;
+            if status.staged_count() > 0 {
+                return Err(format!(
+                    "Repo '{}' has uncommitted tracked changes after sync commit",
+                    node.name
+                ));
+            }
+
+            let lock_path = node.path.join("flake.lock");
+            if lock_path.exists() && plan_node.needs_input_sync {
+                for update in &plan_node.dependencies_to_update {
+                    let expected_rev = commit_shas.get(&update.dependency_node);
+                    verify_lockfile_rev(&lock_path, &update.input_name, expected_rev.map(|s| s.as_str()))?;
+                }
+            }
+
+            for cmd_parts in &plan_node.validation_commands {
+                if cmd_parts.is_empty() {
+                    continue;
+                }
+                let output = std::process::Command::new(&cmd_parts[0])
+                    .args(&cmd_parts[1..])
+                    .current_dir(&node.path)
+                    .output()
+                    .map_err(|e| format!("Validation command failed: {}", e))?;
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    return Err(format!(
+                        "Validation failed in '{}': {} {}",
+                        node.name,
+                        cmd_parts.join(" "),
+                        stderr.trim()
+                    ));
+                }
+            }
+            Ok(())
+        }
+        Action::Push { node: node_id } => {
+            if no_push {
+                return Ok(());
+            }
+
+            let node = match graph.get_node(node_id) {
+                Some(n) => n,
+                None => return Ok(()),
+            };
+
+            let branch = journal
+                .nodes
+                .get(node_id)
+                .and_then(|n| n.branch.as_deref())
+                .unwrap_or(&node.branch);
+
+            let result = git_push(&node.path, branch);
+            match result {
+                Ok(()) => {
+                    push_results.insert(node.name.clone(), Ok(()));
+                    if let Some(entry) = journal.nodes.get_mut(node_id) {
+                        entry.pushed = true;
+                    }
+                    let action_id = action_id(action);
+                    if let Some(entry) = journal.actions.iter_mut().find(|e| e.action_id == action_id) {
+                        entry.pushed = true;
+                    }
+                    Ok(())
+                }
+                Err(e) => {
+                    push_results.insert(node.name.clone(), Err(e.clone()));
+                    let pushed_nodes: Vec<String> = push_results
+                        .iter()
+                        .filter(|(_, r)| r.is_ok())
+                        .map(|(name, _)| name.clone())
+                        .collect();
+                    let failed_nodes: Vec<String> = push_results
+                        .iter()
+                        .filter(|(_, r)| r.is_err())
+                        .map(|(name, _)| name.clone())
+                        .collect();
+                    Err(format!(
+                        "Push failed for '{}': {}\nPushed: {}\nFailed: {}\nResume: stitch commit --resume {}",
+                        node.name, e, pushed_nodes.join(", "), failed_nodes.join(", "), plan.transaction_id
+                    ))
+                }
+            }
+        }
+    }
 }
 
 fn collect_all_changed_files(repo: &Path) -> Result<Vec<String>, String> {
@@ -873,12 +899,24 @@ pub fn resume_sync(
                 }
                 write_journal(&resume_journal, cfg)?;
             }
-            Action::UpdateInputs { node: node_id, .. } => {
+            Action::UpdateInputs { node: node_id, updates, .. } => {
                 let node_path = resume_journal.nodes.get(node_id).map(|n| n.path.clone()).unwrap_or_default();
                 if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
-                    e.state = ActionState::Pending;
+                    e.state = ActionState::Running;
                 }
                 write_journal(&resume_journal, cfg)?;
+
+                // Rerun update_flake_lock_input for each dependency, just like normal execution
+                for update in updates {
+                    let target_rev = commit_shas
+                        .get(&update.dependency_node)
+                        .or(update.target_rev.as_ref())
+                        .ok_or_else(|| format!(
+                            "Resume UpdateInputs for '{}': no commit SHA available for dependency '{}'",
+                            node_id, update.dependency_node
+                        ))?;
+                    update_flake_lock_input(Path::new(&node_path), &update.input_name, target_rev)?;
+                }
 
                 let lock_path = Path::new(&node_path).join("flake.lock");
                 if lock_path.exists() {
@@ -958,8 +996,10 @@ pub fn resume_sync(
                 }
 
                 let node_path = resume_journal.nodes.get(node_id).map(|n| n.path.clone()).unwrap_or_default();
-                let branch = git::git_branch(Path::new(&node_path))?;
-                let result = git_push(Path::new(&node_path), &branch);
+                let branch = resume_journal.nodes.get(node_id)
+                    .and_then(|n| n.branch.as_deref())
+                    .unwrap_or("main");
+                let result = git_push(Path::new(&node_path), branch);
                 if let Err(ref e) = result {
                     push_results.insert(node_id.clone(), Err(e.clone()));
                     any_failed = true;
