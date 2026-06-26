@@ -31,6 +31,8 @@ pub struct PlanItem {
     pub step: Step,
     pub item_type: PlanItemType,
     pub context: ContextConfig,
+    pub reason: PlanReason,
+    pub matched_files: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +42,27 @@ pub enum PlanItemType {
     TaskAfter,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanReason {
+    ChangedFile,
+    Always,
+    Force,
+    Explicit,
+    BeforeAfter,
+}
+
+impl std::fmt::Display for PlanReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PlanReason::ChangedFile => write!(f, "matched changed file(s)"),
+            PlanReason::Always => write!(f, "always-run"),
+            PlanReason::Force => write!(f, "force mode"),
+            PlanReason::Explicit => write!(f, "explicit selection"),
+            PlanReason::BeforeAfter => write!(f, "before/after hook"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Plan {
     pub items: Vec<PlanItem>,
@@ -47,15 +70,27 @@ pub struct Plan {
 
 pub fn build_plan(
     nodes: &[ResolvedNode],
-    phase: Phase,
-    mode: RunMode,
-    changed_files: Option<&[String]>,
+    req: &PlanRequest,
 ) -> Result<Plan, PlanError> {
+    let phase = req.phase;
+    let mode = req.mode;
+    let changed_files: Option<Vec<String>> = if !req.files.is_empty() {
+        Some(req.files.clone())
+    } else {
+        None
+    };
+    let changed_ref = changed_files.as_deref();
     let command_is_mutating = phase.is_mutating();
     let mut items = Vec::new();
 
     for node in nodes {
-        let node_applies = node_applies(node, mode, changed_files);
+        if let Some(ref g) = req.group {
+            if node.id != *g {
+                continue;
+            }
+        }
+
+        let node_applies = node_applies(node, mode, changed_ref);
         if !node_applies && mode == RunMode::Changed {
             continue;
         }
@@ -63,7 +98,7 @@ pub fn build_plan(
         for step_cfg in &node.before {
             let step = Step::from(step_cfg);
             let description = if step.description.is_empty() {
-                format!("node before ({})", step.kind)
+                format!("node before ({})", step.kind.description())
             } else {
                 step.description.clone()
             };
@@ -82,6 +117,8 @@ pub fn build_plan(
                 step: step,
                 item_type: PlanItemType::TaskBefore,
                 context: node.context.clone(),
+                reason: PlanReason::BeforeAfter,
+                matched_files: Vec::new(),
             });
         }
 
@@ -90,7 +127,13 @@ pub fn build_plan(
                 continue;
             }
 
-            let applies = task_applies(task, mode, changed_files);
+            if let Some(ref t) = req.target {
+                if task.config.id != *t {
+                    continue;
+                }
+            }
+
+            let applies = task_applies(task, mode, changed_ref);
 
             if mode == RunMode::Changed && !applies {
                 continue;
@@ -111,6 +154,19 @@ pub fn build_plan(
 
             let task_chain_id = format!("{}.{}", node.id, task.config.id);
 
+            // Compute matched files for this task
+            let matched = compute_matched_files(task, changed_ref);
+
+            let reason = if mode == RunMode::Force {
+                PlanReason::Force
+            } else if task.config.always.unwrap_or(false) {
+                PlanReason::Always
+            } else if !matched.is_empty() {
+                PlanReason::ChangedFile
+            } else {
+                PlanReason::Explicit
+            };
+
             for step_cfg in task.config.before.iter().flatten() {
                 let step = Step::from(step_cfg);
                 items.push(PlanItem {
@@ -123,6 +179,8 @@ pub fn build_plan(
                     step: step,
                     item_type: PlanItemType::TaskBefore,
                     context: node.context.clone(),
+                    reason: PlanReason::BeforeAfter,
+                    matched_files: Vec::new(),
                 });
             }
 
@@ -149,6 +207,8 @@ pub fn build_plan(
                 },
                 item_type: PlanItemType::TaskAction,
                 context: node.context.clone(),
+                reason,
+                matched_files: matched,
             });
 
             for step_cfg in task.config.after.iter().flatten() {
@@ -163,6 +223,8 @@ pub fn build_plan(
                     step: step,
                     item_type: PlanItemType::TaskAfter,
                     context: node.context.clone(),
+                    reason: PlanReason::BeforeAfter,
+                    matched_files: Vec::new(),
                 });
             }
         }
@@ -170,7 +232,7 @@ pub fn build_plan(
         for step_cfg in &node.after {
             let step = Step::from(step_cfg);
             let description = if step.description.is_empty() {
-                format!("node after ({})", step.kind)
+                format!("node after ({})", step.kind.description())
             } else {
                 step.description.clone()
             };
@@ -189,6 +251,8 @@ pub fn build_plan(
                 step: step,
                 item_type: PlanItemType::TaskAfter,
                 context: node.context.clone(),
+                reason: PlanReason::BeforeAfter,
+                matched_files: Vec::new(),
             });
         }
     }
@@ -252,6 +316,29 @@ fn task_applies(task: &ResolvedTask, mode: RunMode, changed_files: Option<&[Stri
     }
 
     task_matches_paths(&changed.paths, changed_files)
+}
+
+fn compute_matched_files(task: &ResolvedTask, changed_files: Option<&[String]>) -> Vec<String> {
+    let changed_files = match changed_files {
+        Some(f) => f,
+        None => return Vec::new(),
+    };
+    let when = match &task.config.when {
+        Some(w) => w,
+        None => return Vec::new(),
+    };
+    let changed = match &when.changed {
+        Some(c) => c,
+        None => return Vec::new(),
+    };
+    if changed.paths.is_empty() {
+        return Vec::new();
+    }
+    changed_files
+        .iter()
+        .filter(|f| task_matches_paths(&changed.paths, &[(*f).clone()]))
+        .cloned()
+        .collect()
 }
 
 fn should_run_step(step: &Step) -> bool {
@@ -332,6 +419,16 @@ mod tests {
         assert!(!task_matches_paths(&patterns, &changed));
     }
 
+    fn req(phase: Phase, mode: RunMode) -> PlanRequest {
+        PlanRequest {
+            phase,
+            mode,
+            group: None,
+            target: None,
+            files: Vec::new(),
+        }
+    }
+
     #[test]
     fn test_mutating_task_refused_in_verify() {
         let task = ResolvedTask {
@@ -370,7 +467,7 @@ mod tests {
             tasks: vec![task],
         };
 
-        let result = build_plan(&[node], Phase::Verify, RunMode::Full, None);
+        let result = build_plan(&[node], &req(Phase::Verify, RunMode::Full));
         assert!(result.is_err());
         match result {
             Err(PlanError::MutatingRefused(id)) => assert_eq!(id, "bad-task"),
@@ -416,7 +513,7 @@ mod tests {
             tasks: vec![task],
         };
 
-        let result = build_plan(&[node], Phase::Fix, RunMode::Full, None);
+        let result = build_plan(&[node], &req(Phase::Fix, RunMode::Full));
         assert!(result.is_ok());
     }
 }

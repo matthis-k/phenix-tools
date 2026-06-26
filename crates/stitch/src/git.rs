@@ -3,36 +3,53 @@ use std::process::Command;
 
 use crate::model::{RepoAvailability, RepoStatus};
 
-/// A typed representation of a single changed file from `git status --porcelain=v1`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GitChangeKind {
-    /// Modified but not staged
-    Modified,
-    /// Added to index (staged)
+/// Index (staging area) status for a file in `git status --porcelain=v1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexStatus {
+    Unmodified,
     Added,
-    /// Deleted from index (staged)
+    Modified,
     Deleted,
-    /// Renamed (staged)
     Renamed,
-    /// Copied (staged)
     Copied,
-    /// Type changed (e.g. file → symlink)
     TypeChanged,
-    /// Untracked file
     Untracked,
-    /// Modified in index and worktree
-    StagedAndModified,
-    /// Deleted in worktree (not staged)
-    WorktreeDeleted,
-    /// Other / unknown two-letter code
-    Other(String),
+    Ignored,
 }
 
+/// Worktree status for a file in `git status --porcelain=v1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorktreeStatus {
+    Unmodified,
+    Modified,
+    Deleted,
+    TypeChanged,
+    Untracked,
+    Ignored,
+}
+
+/// A typed representation of a single changed file from `git status --porcelain=v1`.
+/// The two-letter code XY means X=index, Y=worktree.
 #[derive(Debug, Clone)]
 pub struct GitChange {
-    pub kind: GitChangeKind,
     pub path: String,
     pub old_path: Option<String>,
+    pub index_status: IndexStatus,
+    pub worktree_status: WorktreeStatus,
+}
+
+impl GitChange {
+    pub fn is_staged(&self) -> bool {
+        !matches!(self.index_status, IndexStatus::Unmodified | IndexStatus::Untracked | IndexStatus::Ignored)
+    }
+
+    pub fn is_unstaged(&self) -> bool {
+        !matches!(self.worktree_status, WorktreeStatus::Unmodified | WorktreeStatus::Untracked | WorktreeStatus::Ignored)
+    }
+
+    pub fn is_untracked(&self) -> bool {
+        matches!(self.index_status, IndexStatus::Untracked)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -47,40 +64,26 @@ impl GitStatus {
     }
 
     pub fn staged_count(&self) -> usize {
-        self.changes.iter().filter(|c| {
-            matches!(c.kind, GitChangeKind::Added | GitChangeKind::Deleted | GitChangeKind::Renamed | GitChangeKind::Copied | GitChangeKind::TypeChanged | GitChangeKind::StagedAndModified)
-        }).count()
+        self.changes.iter().filter(|c| c.is_staged()).count()
     }
 
     pub fn unstaged_count(&self) -> usize {
-        self.changes.iter().filter(|c| {
-            matches!(c.kind, GitChangeKind::Modified | GitChangeKind::WorktreeDeleted | GitChangeKind::StagedAndModified)
-        }).count()
+        self.changes.iter().filter(|c| c.is_unstaged()).count()
     }
 
     pub fn untracked_count(&self) -> usize {
-        self.changes.iter().filter(|c| {
-            matches!(c.kind, GitChangeKind::Untracked)
-        }).count()
+        self.changes.iter().filter(|c| c.is_untracked()).count()
     }
 
     pub fn staged_files(&self) -> Vec<&str> {
         self.changes.iter().filter_map(|c| {
-            if matches!(c.kind, GitChangeKind::Added | GitChangeKind::Deleted | GitChangeKind::Renamed | GitChangeKind::Copied | GitChangeKind::TypeChanged | GitChangeKind::StagedAndModified) {
-                Some(c.path.as_str())
-            } else {
-                None
-            }
+            if c.is_staged() { Some(c.path.as_str()) } else { None }
         }).collect()
     }
 
     pub fn unstaged_files(&self) -> Vec<&str> {
         self.changes.iter().filter_map(|c| {
-            if matches!(c.kind, GitChangeKind::Modified | GitChangeKind::WorktreeDeleted | GitChangeKind::StagedAndModified) {
-                Some(c.path.as_str())
-            } else {
-                None
-            }
+            if c.is_unstaged() { Some(c.path.as_str()) } else { None }
         }).collect()
     }
 
@@ -105,7 +108,6 @@ impl GitRepo {
     }
 
     pub fn open(path: &Path) -> Result<Self, String> {
-        // Verify it's a git repo
         let output = Command::new("git")
             .args(["rev-parse", "--git-dir"])
             .current_dir(path)
@@ -260,6 +262,33 @@ impl GitRepo {
 
 /// Parse `git status --porcelain=v1` output into a list of typed changes.
 pub fn parse_porcelain(porcelain: &str) -> Vec<GitChange> {
+    fn char_to_index(c: char) -> IndexStatus {
+        match c {
+            ' ' => IndexStatus::Unmodified,
+            'A' => IndexStatus::Added,
+            'M' => IndexStatus::Modified,
+            'D' => IndexStatus::Deleted,
+            'R' => IndexStatus::Renamed,
+            'C' => IndexStatus::Copied,
+            'T' => IndexStatus::TypeChanged,
+            '?' => IndexStatus::Untracked,
+            '!' => IndexStatus::Ignored,
+            _ => IndexStatus::Unmodified,
+        }
+    }
+
+    fn char_to_worktree(c: char) -> WorktreeStatus {
+        match c {
+            ' ' => WorktreeStatus::Unmodified,
+            'M' => WorktreeStatus::Modified,
+            'D' => WorktreeStatus::Deleted,
+            'T' => WorktreeStatus::TypeChanged,
+            '?' => WorktreeStatus::Untracked,
+            '!' => WorktreeStatus::Ignored,
+            _ => WorktreeStatus::Unmodified,
+        }
+    }
+
     let mut changes = Vec::new();
     for line in porcelain.lines() {
         let line = line.trim();
@@ -279,21 +308,10 @@ pub fn parse_porcelain(porcelain: &str) -> Vec<GitChange> {
         let chars: Vec<char> = flags.chars().collect();
         let (x, y) = if chars.len() >= 2 { (chars[0], chars[1]) } else { (' ', ' ') };
 
-        if flags == "??" {
-            changes.push(GitChange {
-                kind: GitChangeKind::Untracked,
-                path: path_part.to_string(),
-                old_path: None,
-            });
-            continue;
-        }
-
         if flags == "!!" {
-            // Ignored - skip
             continue;
         }
 
-        // Handle rename/copy: "R100 old\0new" or "C100 old\0new"
         let (path, old_path) = if x == 'R' || x == 'C' {
             let parts: Vec<&str> = path_part.split('\0').collect();
             if parts.len() >= 2 {
@@ -305,20 +323,12 @@ pub fn parse_porcelain(porcelain: &str) -> Vec<GitChange> {
             (path_part.to_string(), None)
         };
 
-        let kind = match (x, y) {
-            ('M', ' ') | ('M', _) if y != ' ' => GitChangeKind::StagedAndModified,
-            ('M', _) => GitChangeKind::Added, // staged modification
-            ('A', _) => GitChangeKind::Added,
-            ('D', ' ') => GitChangeKind::Deleted,
-            (' ', 'D') => GitChangeKind::WorktreeDeleted,
-            (' ', 'M') => GitChangeKind::Modified,
-            ('R', _) => GitChangeKind::Renamed,
-            ('C', _) => GitChangeKind::Copied,
-            ('T', _) => GitChangeKind::TypeChanged,
-            _ => GitChangeKind::Other(format!("{}{}", x, y)),
-        };
-
-        changes.push(GitChange { kind, path, old_path });
+        changes.push(GitChange {
+            path,
+            old_path,
+            index_status: char_to_index(x),
+            worktree_status: char_to_worktree(y),
+        });
     }
     changes
 }
@@ -330,7 +340,7 @@ pub fn get_status(name: &str, repo_path: &Path) -> Result<RepoStatus, String> {
     Ok(RepoStatus {
         name: name.to_string(),
         path: repo_path.to_string_lossy().to_string(),
-        branch: git_status.branch,
+        branch: git_status.branch.clone(),
         is_dirty: git_status.is_dirty(),
         status: RepoAvailability::Present,
         staged_count: git_status.staged_count(),
@@ -402,15 +412,9 @@ mod tests {
 
     fn count_porcelain(input: &str) -> (usize, usize, usize) {
         let changes = parse_porcelain(input);
-        let staged = changes.iter().filter(|c| {
-            matches!(c.kind, GitChangeKind::Added | GitChangeKind::Deleted | GitChangeKind::Renamed | GitChangeKind::Copied | GitChangeKind::TypeChanged | GitChangeKind::StagedAndModified)
-        }).count();
-        let unstaged = changes.iter().filter(|c| {
-            matches!(c.kind, GitChangeKind::Modified | GitChangeKind::WorktreeDeleted | GitChangeKind::StagedAndModified)
-        }).count();
-        let untracked = changes.iter().filter(|c| {
-            matches!(c.kind, GitChangeKind::Untracked)
-        }).count();
+        let staged = changes.iter().filter(|c| c.is_staged()).count();
+        let unstaged = changes.iter().filter(|c| c.is_unstaged()).count();
+        let untracked = changes.iter().filter(|c| c.is_untracked()).count();
         (staged, unstaged, untracked)
     }
 
@@ -432,10 +436,28 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_porcelain_staged_unstaged_same_file() {
+        let input = "MM modified.rs\n";
+        let changes = parse_porcelain(input);
+        assert_eq!(changes.len(), 1);
+        assert!(changes[0].is_staged());
+        assert!(changes[0].is_unstaged());
+        assert!(!changes[0].is_untracked());
+    }
+
+    #[test]
     fn test_parse_porcelain_all_staged() {
         let input = "M  staged_mod.rs\nA  added.rs\nD  deleted.rs\n";
         let changes = parse_porcelain(input);
-        assert!(changes.iter().any(|c| matches!(c.kind, GitChangeKind::Added)));
+        assert_eq!(changes.iter().filter(|c| c.is_staged()).count(), 3);
         assert_eq!(changes.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_porcelain_untracked_only() {
+        let input = "?? new_file.rs\n?? another.txt\n";
+        let changes = parse_porcelain(input);
+        assert!(changes.iter().all(|c| c.is_untracked()));
+        assert_eq!(changes.len(), 2);
     }
 }

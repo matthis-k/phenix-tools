@@ -1,10 +1,12 @@
 use std::str::FromStr;
 
+use phenix_mcp_core::input::parse_tool_input;
 use phenix_mcp_core::mcp::{McpTool, ToolContext};
 use phenix_mcp_core::result::{ErrorKind, ToolFailure, ToolResult};
 use phenix_mcp_core::types::{MutationLevel, ToolMetadata};
+use serde::Deserialize;
 use serde_json::{json, Value};
-use tend::model::{Phase, RunMode};
+use tend::model::{Phase, PlanRequest, RunMode};
 
 fn mk_err(kind: ErrorKind, msg: &str, audit_id: &str) -> ToolFailure {
     ToolFailure::new(kind, msg, audit_id)
@@ -45,6 +47,14 @@ fn get_changed_files(root: &std::path::Path) -> Vec<String> {
 
 pub struct TendStatusTool;
 
+#[derive(Deserialize, Default)]
+struct StatusInput {
+    #[serde(default)]
+    root: Option<String>,
+    #[serde(default)]
+    json: bool,
+}
+
 impl McpTool for TendStatusTool {
     fn name(&self) -> &str { "tend.status" }
     fn description(&self) -> &str { "Show known checks, config health, and config tree" }
@@ -57,7 +67,8 @@ impl McpTool for TendStatusTool {
     }
     fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolFailure> {
         let audit_id = ctx.audit.generate_id();
-        let root = input.get("root").and_then(|v| v.as_str()).map(std::path::PathBuf::from)
+        let typed: StatusInput = parse_tool_input(&input, &audit_id)?;
+        let root = typed.root.map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
         let pairs = match walk_tend_configs(&root) {
@@ -133,7 +144,9 @@ impl McpTool for TendPlanTool {
 
         let nodes: Vec<_> = pairs.into_iter().map(|(_, r)| r).collect();
 
-        let plan = match tend::planner::build_plan(&nodes, phase, mode, files.as_deref()) {
+        let req = PlanRequest { phase, mode, group: None, target: None, files: files.unwrap_or_default() };
+
+        let plan = match tend::planner::build_plan(&nodes, &req) {
             Ok(p) => p,
             Err(e) => return Err(mk_err(ErrorKind::Internal, &format!("Plan: {}", e), &audit_id)),
         };
@@ -200,7 +213,8 @@ impl McpTool for TendRunTool {
 
         let nodes: Vec<_> = pairs.into_iter().map(|(_, r)| r).collect();
         let run_mode = RunMode::from_str(mode).unwrap_or(RunMode::Changed);
-        let plan = match tend::planner::build_plan(&nodes, phase, run_mode, changed_files.as_deref()) {
+        let req = PlanRequest { phase, mode: run_mode, group: None, target: None, files: changed_files.unwrap_or_default() };
+        let plan = match tend::planner::build_plan(&nodes, &req) {
             Ok(p) => p,
             Err(e) => return Err(mk_err(ErrorKind::Internal, &format!("Plan: {}", e), &audit_id)),
         };
@@ -269,7 +283,8 @@ impl McpTool for TendExplainTool {
         };
 
         let nodes: Vec<_> = pairs.into_iter().map(|(_, r)| r).collect();
-        let plan = match tend::planner::build_plan(&nodes, Phase::Verify, RunMode::Force, None) {
+        let req = PlanRequest { phase: Phase::Verify, mode: RunMode::Force, group: None, target: None, files: Vec::new() };
+        let plan = match tend::planner::build_plan(&nodes, &req) {
             Ok(p) => p,
             Err(e) => return Err(mk_err(ErrorKind::Internal, &format!("Plan: {}", e), &audit_id)),
         };

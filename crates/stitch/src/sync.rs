@@ -114,13 +114,25 @@ pub enum ActionState {
     Failed,
 }
 
+fn action_id(action: &Action) -> String {
+    match action {
+        Action::Commit { node, .. } => format!("commit-{}", node),
+        Action::UpdateInputs { node, .. } => format!("update-{}", node),
+        Action::Validate { node } => format!("validate-{}", node),
+        Action::Push { node } => format!("push-{}", node),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionJournalEntry {
-    pub action_index: usize,
+    pub action_id: String,
     pub node: NodeId,
+    pub action: Action,
     pub state: ActionState,
     pub commit_sha: Option<String>,
     pub pushed: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expected_files: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -412,7 +424,7 @@ fn execute_plan(
         actions: Vec::new(),
     };
 
-    for (i, action) in plan.actions.iter().enumerate() {
+    for (_i, action) in plan.actions.iter().enumerate() {
         let node_id = action.node();
         if !journal.nodes.contains_key(node_id) {
             let node = graph.get_node(node_id).ok_or_else(|| format!("Node '{}' not found", node_id))?;
@@ -425,12 +437,20 @@ fn execute_plan(
                 },
             );
         }
+        let expected_files = if matches!(action, Action::Commit { .. }) {
+            let repo_path = journal.nodes.get(node_id).map(|n| n.path.clone()).unwrap_or_default();
+            collect_all_changed_files(Path::new(&repo_path)).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         journal.actions.push(ActionJournalEntry {
-            action_index: i,
+            action_id: action_id(action),
             node: node_id.clone(),
+            action: action.clone(),
             state: ActionState::Pending,
             commit_sha: None,
             pushed: false,
+            expected_files,
             error: None,
         });
     }
@@ -668,33 +688,6 @@ fn update_flake_lock_input(repo_path: &Path, input_name: &str, rev: &str) -> Res
         return Ok(());
     }
 
-    let content = std::fs::read_to_string(&lock_path)
-        .map_err(|e| format!("Read flake.lock: {}", e))?;
-    let lock: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Parse flake.lock: {}", e))?;
-
-    let input_node = lock
-        .get("nodes")
-        .and_then(|n| n.get(input_name));
-
-    let input_node = match input_node {
-        Some(node) => node,
-        None => {
-            eprintln!("warning: input '{}' not found in flake.lock (dependency may be declared in sync.json but not as a flake input)", input_name);
-            return Ok(());
-        }
-    };
-
-    let original_url = input_node
-        .get("original")
-        .and_then(|o| o.get("url"))
-        .and_then(|u| u.as_str());
-
-    let locked_url = input_node
-        .get("locked")
-        .and_then(|l| l.get("url"))
-        .and_then(|u| u.as_str());
-
     let output = std::process::Command::new("nix")
         .args(["flake", "update", input_name])
         .current_dir(repo_path)
@@ -703,8 +696,11 @@ fn update_flake_lock_input(repo_path: &Path, input_name: &str, rev: &str) -> Res
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("warning: nix flake update failed, falling back to direct lock editing: {}", stderr.trim());
-        return update_flake_lock_input_direct(repo_path, input_name, rev, original_url, locked_url);
+        return Err(format!(
+            "nix flake update {} failed (transaction is resumable): {}",
+            input_name,
+            stderr.trim()
+        ));
     }
 
     let new_content = std::fs::read_to_string(&lock_path)
@@ -721,50 +717,15 @@ fn update_flake_lock_input(repo_path: &Path, input_name: &str, rev: &str) -> Res
 
     match new_rev {
         Some(r) if r == rev => Ok(()),
-        Some(r) => {
-            eprintln!("note: input '{}' resolved to {} (expected {}), accepting", input_name, r, rev);
-            Ok(())
-        }
-        None => {
-            eprintln!("warning: nix flake update didn't set a rev for '{}', falling back", input_name);
-            update_flake_lock_input_direct(repo_path, input_name, rev, original_url, locked_url)
-        }
+        Some(r) => Err(format!(
+            "nix flake update for '{}' resolved to {} but expected {} (transaction is resumable)",
+            input_name, r, rev
+        )),
+        None => Err(format!(
+            "nix flake update for '{}' did not set a 'rev' field (transaction is resumable)",
+            input_name
+        )),
     }
-}
-
-fn update_flake_lock_input_direct(
-    repo_path: &Path,
-    input_name: &str,
-    rev: &str,
-    _original_url: Option<&str>,
-    _locked_url: Option<&str>,
-) -> Result<(), String> {
-    let lock_path = repo_path.join("flake.lock");
-    let content = std::fs::read_to_string(&lock_path)
-        .map_err(|e| format!("Read flake.lock: {}", e))?;
-    let mut lock: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Parse flake.lock: {}", e))?;
-
-    let nodes = lock
-        .get_mut("nodes")
-        .and_then(|n| n.as_object_mut())
-        .ok_or_else(|| "flake.lock missing 'nodes' section".to_string())?;
-
-    let node = nodes
-        .get_mut(input_name)
-        .ok_or_else(|| format!("Input '{}' not found in flake.lock", input_name))?;
-
-    if let Some(locked) = node.get_mut("locked").and_then(|l| l.as_object_mut()) {
-        locked.insert("rev".to_string(), serde_json::Value::String(rev.to_string()));
-        locked.remove("narHash");
-        locked.remove("lastModified");
-        locked.remove("revCount");
-    }
-
-    std::fs::write(&lock_path, serde_json::to_string_pretty(&lock).map_err(|e| format!("Serialize flake.lock: {}", e))?)
-        .map_err(|e| format!("Write flake.lock: {}", e))?;
-
-    Ok(())
 }
 
 fn verify_lockfile_rev(
@@ -822,10 +783,7 @@ pub fn resume_sync(
     let journal = load_journal(transaction_id, cfg)?
         .ok_or_else(|| format!("Transaction '{}' not found", transaction_id))?;
 
-    let graph = crate::graph::discover_graph(cfg)?;
-    let statuses = crate::status::collect_all(cfg)?;
-
-    let plan = plan_sync(&graph, &statuses, cfg)?;
+    let _graph = crate::graph::discover_graph(cfg)?;
 
     if journal.actions.is_empty() {
         return Err(format!(
@@ -842,164 +800,172 @@ pub fn resume_sync(
     let mut resume_journal = journal.clone();
     resume_journal.phase = JournalPhase::Planned;
 
-    for (action_idx, action) in plan.actions.iter().enumerate() {
-        let journal_entry = resume_journal.actions.get(action_idx);
-
-        // Skip actions that are already Done
-        if let Some(entry) = journal_entry {
-            if entry.state == ActionState::Done {
-                if let Action::Push { .. } = action {
-                    if entry.pushed {
-                        push_results.insert(entry.node.clone(), Ok(()));
-                    }
-                }
-                continue;
+    // Refuse resume if the worktree has files not in the expected set for pending Commit actions
+    for entry in &resume_journal.actions {
+        if entry.state == ActionState::Done {
+            continue;
+        }
+        if matches!(entry.action, Action::Commit { .. }) {
+            let current_files = collect_all_changed_files(
+                &resume_journal.nodes.get(&entry.node).map(|n| Path::new(&n.path)).unwrap_or(Path::new("."))
+            )?;
+            let unexpected: Vec<&String> = current_files.iter()
+                .filter(|f| !entry.expected_files.contains(f))
+                .collect();
+            if !unexpected.is_empty() {
+                return Err(format!(
+                    "Resume refused: worktree for '{}' has {} unexpected file(s) not in the original commit set: {}. Expected {} files.",
+                    entry.node,
+                    unexpected.len(),
+                    unexpected.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
+                    entry.expected_files.len()
+                ));
             }
         }
+    }
 
-        match action {
+    // Resume from journal.actions, not a newly computed plan
+    for entry in &resume_journal.actions.clone() {
+        if entry.state == ActionState::Done {
+            if matches!(entry.action, Action::Push { .. }) && entry.pushed {
+                push_results.insert(entry.node.clone(), Ok(()));
+            }
+            continue;
+        }
+
+        match &entry.action {
             Action::Commit { node: node_id, message: _ } => {
-                let node = match graph.get_node(node_id) {
-                    Some(n) => n,
-                    None => continue,
-                };
-
-                let files = collect_all_changed_files(&node.path)?;
-                if files.is_empty() {
-                    // Already clean, treat as done
-                    if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
-                        entry.state = ActionState::Done;
+                let current_files = collect_all_changed_files(
+                    &resume_journal.nodes.get(node_id).map(|n| Path::new(&n.path)).unwrap_or(Path::new("."))
+                )?;
+                if current_files.is_empty() {
+                    if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
+                        e.state = ActionState::Done;
                     }
                     write_journal(&resume_journal, cfg)?;
                     continue;
                 }
 
-                if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
-                    entry.state = ActionState::Pending;
+                let node_path = resume_journal.nodes.get(node_id).map(|n| n.path.clone()).unwrap_or_default();
+                if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
+                    e.state = ActionState::Pending;
                 }
                 write_journal(&resume_journal, cfg)?;
 
                 let msg = if let Some(sha) = commit_shas.get(node_id) {
-                    format!("chore(stitch): resume commit for {}\n\nPrevious: {}", node.name, sha)
+                    format!("chore(stitch): resume commit for {}\n\nPrevious: {}", node_id, sha)
                 } else {
-                    format!("chore(stitch): resume commit for {}", node.name)
+                    format!("chore(stitch): resume commit for {}", node_id)
                 };
 
-                git::git_add(&node.path, &files)?;
+                git::git_add(Path::new(&node_path), &current_files)?;
                 let trailed = crate::model::add_trailers(&msg, transaction_id, &cfg.workspace);
-                git::git_commit(&node.path, &trailed)?;
-                let sha = git::git_head(&node.path)?;
+                git::git_commit(Path::new(&node_path), &trailed)?;
+                let sha = git::git_head(Path::new(&node_path))?;
                 commit_shas.insert(node_id.clone(), sha.clone());
 
-                if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
-                    entry.state = ActionState::Done;
-                    entry.commit_sha = Some(sha.clone());
+                if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
+                    e.state = ActionState::Done;
+                    e.commit_sha = Some(sha.clone());
                 }
-                if let Some(entry) = resume_journal.nodes.get_mut(node_id) {
-                    entry.commit_sha = Some(sha);
+                if let Some(n) = resume_journal.nodes.get_mut(node_id) {
+                    n.commit_sha = Some(sha);
                 }
                 write_journal(&resume_journal, cfg)?;
             }
             Action::UpdateInputs { node: node_id, .. } => {
-                let node = match graph.get_node(node_id) {
-                    Some(n) => n,
-                    None => continue,
-                };
-
-                if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
-                    entry.state = ActionState::Pending;
+                let node_path = resume_journal.nodes.get(node_id).map(|n| n.path.clone()).unwrap_or_default();
+                if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
+                    e.state = ActionState::Pending;
                 }
                 write_journal(&resume_journal, cfg)?;
 
-                let lock_path = node.path.join("flake.lock");
+                let lock_path = Path::new(&node_path).join("flake.lock");
                 if lock_path.exists() {
-                    git::git_add(&node.path, &[lock_path.to_string_lossy().to_string()])?;
-                    let msg = format!("chore(inputs): resume sync for {}", node.name);
+                    git::git_add(Path::new(&node_path), &[lock_path.to_string_lossy().to_string()])?;
+                    let msg = format!("chore(inputs): resume sync for {}", node_id);
                     let trailed = crate::model::add_trailers(&msg, transaction_id, &cfg.workspace);
-                    git::git_commit(&node.path, &trailed)?;
-                    let sha = git::git_head(&node.path)?;
+                    git::git_commit(Path::new(&node_path), &trailed)?;
+                    let sha = git::git_head(Path::new(&node_path))?;
                     commit_shas.insert(node_id.clone(), sha.clone());
 
-                    if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
-                        entry.state = ActionState::Done;
-                        entry.commit_sha = Some(sha.clone());
+                    if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
+                        e.state = ActionState::Done;
+                        e.commit_sha = Some(sha.clone());
                     }
-                    if let Some(entry) = resume_journal.nodes.get_mut(node_id) {
-                        entry.commit_sha = Some(sha);
+                    if let Some(n) = resume_journal.nodes.get_mut(node_id) {
+                        n.commit_sha = Some(sha);
                     }
                     write_journal(&resume_journal, cfg)?;
                 } else {
-                    if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
-                        entry.state = ActionState::Done;
+                    if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
+                        e.state = ActionState::Done;
                     }
                     write_journal(&resume_journal, cfg)?;
                 }
             }
             Action::Validate { node: node_id } => {
-                // Re-run validation
-                let plan_node = match plan.node_plans.get(node_id) {
-                    Some(p) => p,
-                    None => continue,
-                };
-                let node = match graph.get_node(node_id) {
-                    Some(n) => n,
-                    None => continue,
+                let node_path = resume_journal.nodes.get(node_id).map(|n| n.path.clone()).unwrap_or_default();
+                let sync_path = Path::new(&node_path).join("sync.json");
+                let commands: Vec<Vec<String>> = if sync_path.exists() {
+                    let content = std::fs::read_to_string(&sync_path)
+                        .map_err(|e| format!("Read sync.json: {}", e))?;
+                    let sync: crate::graph::SyncJson = serde_json::from_str(&content)
+                        .map_err(|e| format!("Parse sync.json: {}", e))?;
+                    sync.checks.iter().map(|c| shlex_split(c)).collect()
+                } else {
+                    Vec::new()
                 };
 
-                for cmd_parts in &plan_node.validation_commands {
+                for cmd_parts in &commands {
                     if cmd_parts.is_empty() {
                         continue;
                     }
                     let output = std::process::Command::new(&cmd_parts[0])
                         .args(&cmd_parts[1..])
-                        .current_dir(&node.path)
+                        .current_dir(&node_path)
                         .output()
                         .map_err(|e| format!("Validation command failed: {}", e))?;
                     if !output.status.success() {
                         let stderr = String::from_utf8_lossy(&output.stderr);
                         return Err(format!(
                             "Validation failed in '{}' during resume: {} {}",
-                            node.name,
+                            node_id,
                             cmd_parts.join(" "),
                             stderr.trim()
                         ));
                     }
                 }
 
-                if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
-                    entry.state = ActionState::Done;
+                if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
+                    e.state = ActionState::Done;
                 }
                 write_journal(&resume_journal, cfg)?;
             }
             Action::Push { node: node_id } => {
-                if let Some(entry) = journal_entry {
-                    if entry.pushed {
-                        push_results.insert(entry.node.clone(), Ok(()));
-                        continue;
-                    }
+                if entry.pushed {
+                    push_results.insert(entry.node.clone(), Ok(()));
+                    continue;
                 }
 
                 if no_push {
                     push_results.insert(node_id.clone(), Err("Skipped (--no-push)".to_string()));
-                    if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
-                        entry.state = ActionState::Done;
+                    if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
+                        e.state = ActionState::Done;
                     }
                     write_journal(&resume_journal, cfg)?;
                     continue;
                 }
 
-                let node = match graph.get_node(node_id) {
-                    Some(n) => n,
-                    None => continue,
-                };
-
-                let result = git_push(&node.path, &node.branch);
+                let node_path = resume_journal.nodes.get(node_id).map(|n| n.path.clone()).unwrap_or_default();
+                let branch = git::git_branch(Path::new(&node_path))?;
+                let result = git_push(Path::new(&node_path), &branch);
                 if let Err(ref e) = result {
                     push_results.insert(node_id.clone(), Err(e.clone()));
                     any_failed = true;
-                    if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
-                        entry.state = ActionState::Failed;
-                        entry.error = Some(e.clone());
+                    if let Some(je) = resume_journal.actions.iter_mut().find(|je| je.action_id == entry.action_id) {
+                        je.state = ActionState::Failed;
+                        je.error = Some(e.clone());
                     }
                     resume_journal.phase = JournalPhase::Failed;
                     write_journal(&resume_journal, cfg)?;
@@ -1007,12 +973,12 @@ pub fn resume_sync(
                 }
 
                 push_results.insert(node_id.clone(), Ok(()));
-                if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
-                    entry.state = ActionState::Done;
-                    entry.pushed = true;
+                if let Some(je) = resume_journal.actions.iter_mut().find(|je| je.action_id == entry.action_id) {
+                    je.state = ActionState::Done;
+                    je.pushed = true;
                 }
-                if let Some(entry) = resume_journal.nodes.get_mut(node_id) {
-                    entry.pushed = true;
+                if let Some(n) = resume_journal.nodes.get_mut(node_id) {
+                    n.pushed = true;
                 }
                 write_journal(&resume_journal, cfg)?;
             }
@@ -1342,7 +1308,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_flake_lock_input_basic() {
+    fn test_update_flake_lock_input_fails_without_nix() {
         use std::io::Write;
         let dir = std::env::temp_dir().join("__sync_test_flake_lock");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1364,14 +1330,11 @@ mod tests {
         let mut f = std::fs::File::create(dir.join("flake.lock")).unwrap();
         f.write_all(lock_content.as_bytes()).unwrap();
 
-        // This will try nix first, fail, and fall back to direct editing
-        update_flake_lock_input(&dir, "phenix-pins", "def4567890123456789012345678901234567890").unwrap();
-
-        let content = std::fs::read_to_string(dir.join("flake.lock")).unwrap();
-        let lock: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let rev = lock["nodes"]["phenix-pins"]["locked"]["rev"].as_str().unwrap().to_string();
-        assert_eq!(rev, "def4567890123456789012345678901234567890");
-        assert!(lock["nodes"]["phenix-pins"]["locked"].get("narHash").is_none());
+        // Without nix available, this should fail (no direct fallback anymore)
+        let result = update_flake_lock_input(&dir, "phenix-pins", "def4567890123456789012345678901234567890");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("nix flake update") || err.contains("resumable"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

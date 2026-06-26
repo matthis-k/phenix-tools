@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use tend::config;
 use tend::discover;
 use tend::execute;
-use tend::model::{Phase, RunMode};
+use tend::model::{Phase, PlanRequest, RunMode};
 use tend::planner;
 use tend::report;
 
@@ -248,15 +248,15 @@ fn cmd_run(
         .map_err(|e| format!("discovery failed: {e}"))?;
     let nodes = discover::resolve_nodes(root, discovered);
 
-    let changed_files = if mode == RunMode::Changed {
-        Some(get_changed_files(root).unwrap_or_default())
+    let files = if mode == RunMode::Changed {
+        get_changed_files(root).unwrap_or_default()
     } else {
-        None
+        Vec::new()
     };
 
-    let changed_ref = changed_files.as_deref();
+    let req = PlanRequest { phase, mode, group: None, target: None, files };
 
-    let plan = planner::build_plan(&nodes, phase, mode, changed_ref).map_err(|e| match e {
+    let plan = planner::build_plan(&nodes, &req).map_err(|e| match e {
         planner::PlanError::MutatingRefused(id) => {
             format!("mutating task '{id}' refused in non-mutating command")
         }
@@ -370,51 +370,37 @@ fn cmd_plan(
         .map_err(|e| format!("discovery failed: {e}"))?;
     let nodes = discover::resolve_nodes(root, discovered);
 
-    let changed_files = match run_mode {
+    let plan_files = match run_mode {
         RunMode::Changed | RunMode::Staged => {
             let mut all = get_changed_files(root).unwrap_or_default();
             if !files.is_empty() {
                 all.extend(files.iter().cloned());
             }
-            Some(all)
+            all
         }
-        _ => {
-            if !files.is_empty() {
-                Some(files.to_vec())
-            } else {
-                None
-            }
-        }
+        _ => files.to_vec(),
     };
 
-    let plan = planner::build_plan(&nodes, phase, run_mode, changed_files.as_deref())
+    let req = PlanRequest {
+        phase,
+        mode: run_mode,
+        group: group.map(|s| s.to_string()),
+        target: target.map(|s| s.to_string()),
+        files: plan_files,
+    };
+
+    let plan = planner::build_plan(&nodes, &req)
         .map_err(|e| format!("{e}"))?;
 
-    let mut items: Vec<&planner::PlanItem> = plan.items.iter().filter(|item| {
-        if let Some(g) = group {
-            if item.node_path.to_string_lossy() != g && item.task_id != g {
-                return false;
-            }
-        }
-        if let Some(t) = target {
-            if item.task_id != t {
-                return false;
-            }
-        }
-        true
-    }).collect();
-
-    items.sort_by_key(|item| item.task_id.clone());
-
     if json {
-        let checks: Vec<serde_json::Value> = items.iter().map(|item| {
+        let checks: Vec<serde_json::Value> = plan.items.iter().map(|item| {
             serde_json::json!({
                 "id": item.task_id,
                 "group": item.chain_id.split('.').next().unwrap_or(&item.task_id),
                 "kind": item.step.kind.description(),
                 "phase": item.phase,
-                "reason": "planned",
-                "files": [],
+                "reason": item.reason.to_string(),
+                "files": item.matched_files,
                 "depends_on": []
             })
         }).collect();
@@ -425,18 +411,24 @@ fn cmd_plan(
     } else {
         println!("Checks that would run (mode: {}, phase: {}):", run_mode, phase);
         println!();
-        if items.is_empty() {
+        if plan.items.is_empty() {
             println!("  (no checks match)");
         } else {
-            for (i, item) in items.iter().enumerate() {
+            for (i, item) in plan.items.iter().enumerate() {
                 println!("{}. {} [{}]", i + 1, item.task_id, item.step.kind.description());
                 if !item.description.is_empty() {
                     println!("   description: {}", item.description);
                 }
-                println!("   reason: planned via {} ({})", run_mode, phase);
+                println!("   reason: {}", item.reason);
+                if !item.matched_files.is_empty() {
+                    println!("   files:");
+                    for f in &item.matched_files {
+                        println!("     {}", f);
+                    }
+                }
                 println!();
             }
-            println!("Total: {} check(s) would run", items.len());
+            println!("Total: {} check(s) would run", plan.items.len());
         }
     }
     Ok(0)
