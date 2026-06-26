@@ -66,22 +66,28 @@ fn run_with_timeout(
     cmd: &mut Command,
     timeout: std::time::Duration,
 ) -> Result<std::process::Output, String> {
-    use std::sync::mpsc;
-    use std::thread;
+    let start = std::time::Instant::now();
+    let mut child = cmd.spawn().map_err(|e| format!("Spawn: {}", e))?;
 
-    let (tx, rx) = mpsc::channel();
-
-    let child = cmd.spawn().map_err(|e| format!("Spawn: {}", e))?;
-
-    let _handle = thread::spawn(move || {
-        let result = child.wait_with_output();
-        let _ = tx.send(result);
-    });
-
-    match rx.recv_timeout(timeout) {
-        Ok(Ok(output)) => Ok(output),
-        Ok(Err(e)) => Err(format!("Wait: {}", e)),
-        Err(_) => Err("timeout".to_string()),
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                let output = child.wait_with_output().map_err(|e| format!("Wait: {}", e))?;
+                return Ok(output);
+            }
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("timeout".to_string());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                return Err(format!("Wait error: {}", e));
+            }
+        }
     }
 }
 

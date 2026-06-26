@@ -3,6 +3,7 @@ pub mod mcp;
 pub mod result;
 pub mod roots;
 pub mod runner;
+pub mod safety;
 pub mod types;
 
 pub use audit::AuditSink;

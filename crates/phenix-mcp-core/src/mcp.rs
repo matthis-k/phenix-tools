@@ -8,12 +8,14 @@ use crate::audit::AuditSink;
 use crate::result::ToolFailure;
 use crate::roots::RootValidator;
 use crate::runner::CommandRunner;
+use crate::safety::SafetyPolicy;
 use crate::types::ToolMetadata;
 
 pub struct ToolContext {
     pub roots: RootValidator,
     pub runner: CommandRunner,
     pub audit: AuditSink,
+    pub safety: SafetyPolicy,
     pub server_name: String,
     pub server_version: String,
 }
@@ -48,14 +50,61 @@ pub struct PromptArgument {
     pub required: bool,
 }
 
+fn extract_rootable_paths(input: &Value) -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    for key in &["root", "path", "dir", "directory"] {
+        if let Some(v) = input.get(*key).and_then(|v| v.as_str()) {
+            if !v.is_empty() {
+                paths.push(std::path::PathBuf::from(v));
+            }
+        }
+    }
+    paths
+}
+
 fn tool_to_json(tool: &dyn McpTool) -> Value {
+    let meta = tool.metadata();
+    let schema = tool.input_schema();
+
+    // Determine required fields based on metadata
+    let mut required: Vec<String> = Vec::new();
+
+    // If tool requires apply=true and mutates, "apply" is required
+    if meta.mutation.requires_apply() {
+        required.push("apply".to_string());
+    }
+
+    // Check if schema itself has a "required" field from the tool
+    if let Some(schema_req) = schema.get("required").and_then(|v| v.as_array()) {
+        for r in schema_req {
+            if let Some(s) = r.as_str() {
+                if !required.contains(&s.to_string()) {
+                    required.push(s.to_string());
+                }
+            }
+        }
+    }
+
+    // Extract properties (without "required" key if present in schema)
+    let properties = {
+        let mut map = serde_json::Map::new();
+        if let Some(obj) = schema.as_object() {
+            for (k, v) in obj {
+                if k != "required" {
+                    map.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        Value::Object(map)
+    };
+
     json!({
         "name": tool.name(),
         "description": tool.description(),
         "inputSchema": {
             "type": "object",
-            "properties": tool.input_schema(),
-            "required": []
+            "properties": properties,
+            "required": required
         }
     })
 }
@@ -213,6 +262,71 @@ impl McpServer {
                 match tool {
                     Some(t) => {
                         let _audit_id = self.context.audit.generate_id();
+                        let meta = t.metadata();
+
+                        if let Err(e) = self.context.safety.check_mutation(&meta.mutation) {
+                            let failure = ToolFailure::new(
+                                crate::result::ErrorKind::PolicyDenied, &e, &_audit_id,
+                            );
+                            return Some(json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": {
+                                    "content": [{
+                                        "type": "text",
+                                        "text": serde_json::to_string(&failure).unwrap_or_default()
+                                    }],
+                                    "isError": true
+                                }
+                            }));
+                        }
+
+                        if meta.allowed_roots_only == Some(true) && !self.context.roots.roots().is_empty() {
+                            let root_paths = extract_rootable_paths(arguments);
+                            for p in &root_paths {
+                                if let Err(e) = self.context.roots.validate_path(p) {
+                                    let failure = ToolFailure::new(
+                                        crate::result::ErrorKind::RootViolation,
+                                        &format!("Path '{}' is outside declared roots: {}", p.display(), e),
+                                        &_audit_id,
+                                    );
+                                    return Some(json!({
+                                        "jsonrpc": "2.0",
+                                        "id": id,
+                                        "result": {
+                                            "content": [{
+                                                "type": "text",
+                                                "text": serde_json::to_string(&failure).unwrap_or_default()
+                                            }],
+                                            "isError": true
+                                        }
+                                    }));
+                                }
+                            }
+                        }
+
+                        if meta.mutation.requires_apply() {
+                            let apply = arguments.get("apply").and_then(|v| v.as_bool()).unwrap_or(false);
+                            if !apply {
+                                let failure = ToolFailure::new(
+                                    crate::result::ErrorKind::PolicyDenied,
+                                    "Mutating tool requires apply=true",
+                                    &_audit_id,
+                                );
+                                return Some(json!({
+                                    "jsonrpc": "2.0",
+                                    "id": id,
+                                    "result": {
+                                        "content": [{
+                                            "type": "text",
+                                            "text": serde_json::to_string(&failure).unwrap_or_default()
+                                        }],
+                                        "isError": true
+                                    }
+                                }));
+                            }
+                        }
+
                         let result = t.call(arguments.clone(), &self.context);
 
                         match result {

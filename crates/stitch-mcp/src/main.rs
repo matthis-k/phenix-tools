@@ -8,6 +8,7 @@ use phenix_mcp_core::audit::AuditSink;
 use phenix_mcp_core::mcp::{McpServer, ToolContext};
 use phenix_mcp_core::roots::{McpRoot, RootValidator};
 use phenix_mcp_core::runner::CommandRunner;
+use phenix_mcp_core::safety::SafetyPolicy;
 
 fn main() {
     let audit_dir = PathBuf::from(
@@ -27,6 +28,7 @@ fn main() {
         roots: validator,
         runner: CommandRunner::new(),
         audit: AuditSink::new(Some(audit_dir)),
+        safety: SafetyPolicy::default(),
         server_name: "stitch-mcp".to_string(),
         server_version: "0.1.0".to_string(),
     };

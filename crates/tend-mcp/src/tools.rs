@@ -207,8 +207,13 @@ impl McpTool for TendRunTool {
             Err(e) => return Err(mk_err(ErrorKind::NotFound, &format!("Discovery: {}", e), &audit_id)),
         };
 
+        let changed_files = match mode {
+            "changed" | "staged" => Some(get_changed_files(&root)),
+            _ => None,
+        };
+
         let nodes: Vec<_> = pairs.into_iter().map(|(_, r)| r).collect();
-        let plan = match tend::planner::build_plan(&nodes, "verify", if mode == "all" { "force" } else { mode }, None) {
+        let plan = match tend::planner::build_plan(&nodes, "verify", if mode == "all" { "force" } else { mode }, changed_files.as_deref()) {
             Ok(p) => p,
             Err(e) => return Err(mk_err(ErrorKind::Internal, &format!("Plan: {}", e), &audit_id)),
         };
