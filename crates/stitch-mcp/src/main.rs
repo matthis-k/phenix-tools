@@ -26,7 +26,10 @@ fn main() {
         roots: validator,
         runner: CommandRunner::new(),
         audit: AuditSink::new(Some(audit_dir)),
-        safety: SafetyPolicy::default(),
+        safety: SafetyPolicy {
+            allow_commit: true,
+            ..SafetyPolicy::default()
+        },
         server_name: "stitch-mcp".to_string(),
         server_version: "0.1.0".to_string(),
     };
