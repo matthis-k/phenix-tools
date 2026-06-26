@@ -9,7 +9,6 @@ use stitch::git;
 use stitch::graph;
 use stitch::status;
 use stitch::sync;
-use stitch::sync::Action;
 
 fn main() {
     let cli = Cli::parse();
@@ -31,6 +30,9 @@ fn main() {
             force,
             resume,
             messages,
+            write_template,
+            message,
+            repo,
         } => cmd_commit(
             *dry_run,
             *json_output,
@@ -38,6 +40,9 @@ fn main() {
             *force,
             resume.as_deref(),
             messages.as_deref(),
+            *write_template,
+            message.clone(),
+            repo.clone(),
         ),
         Commands::Push {
             dry_run,
@@ -180,6 +185,12 @@ enum Commands {
         resume: Option<String>,
         #[arg(long, help = "Path to JSON messages file (from commit_template)")]
         messages: Option<String>,
+        #[arg(long, help = "Write .stitch/messages.json and exit")]
+        write_template: bool,
+        #[arg(short = 'm', long = "message", help = "Commit message; only valid with --repo")]
+        message: Option<String>,
+        #[arg(long, help = "Repo name")]
+        repo: Option<String>,
     },
     /// Push committed changes in DAG dependency order
     Push {
@@ -625,8 +636,43 @@ fn cmd_commit(
     force: bool,
     resume_id: Option<&str>,
     messages_path: Option<&str>,
+    write_template: bool,
+    message: Option<String>,
+    repo: Option<String>,
 ) -> Result<(), String> {
     let cfg = config::find_and_load()?;
+
+    if write_template {
+        let statuses = status::collect_all(&cfg)?;
+        let mut template = serde_json::Map::new();
+        for s in &statuses {
+            if !s.is_dirty {
+                continue;
+            }
+            let repo_cfg = match cfg.repos.iter().find(|r| r.name == s.name) {
+                Some(r) => r,
+                None => continue,
+            };
+            let repo_path = repo_cfg.resolved_path(&cfg);
+            let diff = git::git_diff_names(&repo_path).unwrap_or_default();
+            template.insert(
+                s.name.clone(),
+                serde_json::json!({ "subject": "", "body": "", "files": diff }),
+            );
+        }
+        let cwd = std::env::current_dir()
+            .map_err(|e| format!("Cannot get cwd: {}", e))?;
+        let msg_dir = cwd.join(".stitch");
+        std::fs::create_dir_all(&msg_dir)
+            .map_err(|e| format!("Create .stitch dir: {}", e))?;
+        let out_path = msg_dir.join("messages.json");
+        let content = serde_json::to_string_pretty(&serde_json::json!({ "messages": template }))
+            .map_err(|e| format!("Serialize: {}", e))?;
+        std::fs::write(&out_path, &content)
+            .map_err(|e| format!("Write {}: {}", out_path.display(), e))?;
+        println!("Wrote {}", out_path.display());
+        return Ok(());
+    }
 
     if let Some(tx_id) = resume_id {
         let result = sync::resume_sync(tx_id, &cfg, true)?;
@@ -636,8 +682,7 @@ fn cmd_commit(
 
     let dag = graph::discover_graph(&cfg)?;
     let statuses = status::collect_all(&cfg)?;
-    let mut plan = sync::plan_commit(&dag, &statuses, &cfg, false)?;
-    plan.actions.retain(|a| matches!(a, Action::Commit { .. }));
+    let plan = sync::plan_local_commit(&dag, &statuses, &cfg)?;
 
     if dry_run {
         println!("{}", sync::format_plan_output(&plan, json_output));
@@ -662,7 +707,7 @@ fn cmd_commit(
         );
     }
 
-    let messages: Option<BTreeMap<String, String>> = if let Some(path) = messages_path {
+    let mut messages: Option<BTreeMap<String, String>> = if let Some(path) = messages_path {
         let content = std::fs::read_to_string(path).map_err(|e| format!("Read messages: {}", e))?;
         let raw: serde_json::Map<String, serde_json::Value> =
             serde_json::from_str(&content).map_err(|e| format!("Parse messages: {}", e))?;
@@ -680,7 +725,12 @@ fn cmd_commit(
         None
     };
 
-    let result = sync::execute_sync(&plan, &dag, &cfg, true, messages.as_ref(), force)?;
+    if let (Some(r), Some(m)) = (repo, message) {
+        let msgs = messages.get_or_insert_with(BTreeMap::new);
+        msgs.insert(r, m);
+    }
+
+    let result = sync::execute_local_commit_plan(&plan, &dag, &cfg, messages.as_ref(), force)?;
 
     println!("{}", sync::format_result_output(&result, json_output));
 
@@ -701,7 +751,7 @@ fn cmd_sync(
     let dag = graph::discover_graph(&cfg)?;
     let statuses = status::collect_all(&cfg)?;
     let mut plan = sync::plan_sync(&dag, &statuses, &cfg)?;
-    plan.actions.retain(|a| !matches!(a, Action::Commit { .. }));
+    plan.actions.retain(|a| !matches!(a, sync::Action::Commit { .. }));
 
     if dry_run {
         println!("{}", sync::format_plan_output(&plan, json_output));

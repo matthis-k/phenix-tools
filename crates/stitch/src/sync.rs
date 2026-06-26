@@ -396,6 +396,40 @@ pub fn execute_sync(
     execute_plan(plan, graph, cfg, no_push, messages, force)
 }
 
+pub fn plan_local_commit(
+    graph: &WorkspaceGraph,
+    statuses: &[RepoStatus],
+    cfg: &WorkspaceConfig,
+) -> Result<ActionPlan, String> {
+    let mut plan = plan_commit(graph, statuses, cfg, false)?;
+
+    plan.actions.retain(|a| matches!(a, Action::Commit { .. }));
+
+    for node_plan in plan.node_plans.values_mut() {
+        node_plan.needs_input_sync = false;
+        node_plan.dependencies_to_update.clear();
+        node_plan.validation_commands.clear();
+    }
+
+    plan.affected_nodes = plan
+        .actions
+        .iter()
+        .map(|a| a.node().clone())
+        .collect();
+
+    Ok(plan)
+}
+
+pub fn execute_local_commit_plan(
+    plan: &ActionPlan,
+    graph: &WorkspaceGraph,
+    cfg: &WorkspaceConfig,
+    messages: Option<&BTreeMap<String, String>>,
+    force: bool,
+) -> Result<ActionResult, String> {
+    execute_plan(plan, graph, cfg, true, messages, force)
+}
+
 fn execute_plan(
     plan: &ActionPlan,
     graph: &WorkspaceGraph,

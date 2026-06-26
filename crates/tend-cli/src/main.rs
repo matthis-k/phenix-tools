@@ -338,54 +338,44 @@ fn cmd_gate(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> 
 }
 
 fn cmd_explain(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> {
-    let discovered = discover::discover_configs(root, configs)
-        .map_err(|e| format!("discovery failed: {e}"))?;
+    let discovered =
+        discover::discover_configs(root, configs).map_err(|e| format!("discovery failed: {e}"))?;
     let nodes = discover::resolve_nodes(root, discovered);
 
-    let files = get_changed_files(root).unwrap_or_default();
-    let req = PlanRequest {
-        phase: Phase::Verify,
-        mode: RunMode::Changed,
-        group: None,
-        target: None,
-        files,
-    };
+    println!("tend explain");
+    println!();
+    println!("Persisted run reports are not implemented yet.");
+    println!("This command currently explains the configured checks and gives stable reproduction commands.");
+    println!();
 
-    let plan = planner::build_plan(&nodes, &req).map_err(|e| format!("{e}"))?;
+    let mut total = 0usize;
 
-    if plan.items.is_empty() {
-        println!("No checks to run. Workspace is clean.");
-        return Ok(0);
-    }
+    for node in &nodes {
+        for task in &node.tasks {
+            total += 1;
 
-    let result = execute::execute_plan(&plan.items, root);
-    let (failed, passed, skipped) = report::print_results(&result, false);
-
-    if failed > 0 {
-        println!();
-        println!("=== Explanation ===");
-        for item in &plan.items {
-            let outcome = result
-                .iter()
-                .find(|r| r.task_id == item.task_id)
-                .map(|r| &r.outcome);
-            match outcome {
-                Some(tend::checks::CheckOutcome::Failed { reason }) => {
-                    println!("FAILED: {}", item.task_id);
-                    println!("  Check: {} ({})", item.description, item.chain_id);
-                    println!("  Error: {}", reason);
-                    println!("  Suggestion: Run `tend run --phase verify --mode full` to re-run with full output.");
-                    println!();
-                }
-                _ => {}
+            let desc = task.config.description.as_deref().unwrap_or("");
+            println!("check: {}", task.config.id);
+            println!("  node: {}", node.id);
+            println!("  phase: {}", task.config.phase);
+            if !desc.is_empty() {
+                println!("  description: {}", desc);
             }
+            println!(
+                "  reproduce: tend run --phase {} --mode full",
+                task.config.phase
+            );
+            println!();
         }
-        eprintln!("{} failed, {} passed, {} skipped", failed, passed, skipped);
-        Ok(1)
-    } else {
-        println!("All checks passed ({} passed, {} skipped)", passed, skipped);
-        Ok(0)
     }
+
+    if total == 0 {
+        println!("No tasks discovered.");
+        return Ok(1);
+    }
+
+    println!("Total: {total} task(s)");
+    Ok(0)
 }
 
 fn cmd_status(root: &PathBuf, configs: Option<&[PathBuf]>, json: bool) -> Result<i32, String> {
