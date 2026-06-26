@@ -7,59 +7,19 @@ pub mod set_files;
 pub mod set_message;
 pub mod validate;
 
-use clap::Subcommand;
-
 use crate::model::{Changeset, WorkspaceConfig};
 
 const PLAN_FILE: &str = ".stitch-plan.json";
 
-#[derive(Subcommand)]
 pub enum ChangesetCommands {
-    /// Create a new changeset
-    New {
-        /// Title for the new changeset
-        title: String,
-    },
-    /// Show current changeset status
-    Status {
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Build/review a plan for the current changeset
-    Plan {
-        /// Write the plan to the active changeset
-        #[arg(long)]
-        write: bool,
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Set commit message for a repo in the changeset
-    SetMessage {
-        /// Repo name
-        repo: String,
-        /// Commit message
-        message: String,
-    },
-    /// Set tracked files for a repo in the changeset
-    SetFiles {
-        /// Repo name
-        repo: String,
-        /// Files to track
-        files: Vec<String>,
-    },
-    /// Validate the current changeset
-    Validate {
-        /// Output as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Commit the validated changeset
+    New { title: String },
+    Status { json: bool },
+    Plan { write: bool, json: bool },
+    SetMessage { repo: String, message: String },
+    SetFiles { repo: String, files: Vec<String> },
+    Validate { json: bool },
     Commit,
-    /// Push committed changeset repos
     Push,
-    /// Abort the current changeset
     Abort,
 }
 

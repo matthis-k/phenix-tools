@@ -162,6 +162,7 @@ mod tests {
             patterns,
             always: false,
             description: String::new(),
+            expect: None,
         }
     }
 

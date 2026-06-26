@@ -1,15 +1,9 @@
 use std::path::Path;
 use std::process::Command;
 
-use crate::model::RepoStatus;
+use crate::model::{RepoAvailability, RepoStatus};
 
-pub fn get_status(repo_path: &Path) -> Result<RepoStatus, String> {
-    let name = repo_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown")
-        .to_string();
-
+pub fn get_status(name: &str, repo_path: &Path) -> Result<RepoStatus, String> {
     let branch = git_branch(repo_path)?;
     let porcelain = git_porcelain(repo_path)?;
 
@@ -43,10 +37,11 @@ pub fn get_status(repo_path: &Path) -> Result<RepoStatus, String> {
     let path_str = repo_path.to_string_lossy().to_string();
 
     Ok(RepoStatus {
-        name,
+        name: name.to_string(),
         path: path_str,
         branch,
         is_dirty,
+        status: RepoAvailability::Present,
         staged_count: staged,
         unstaged_count: unstaged,
         untracked_count: untracked,

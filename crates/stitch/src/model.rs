@@ -107,12 +107,23 @@ impl std::fmt::Display for RepoState {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum RepoAvailability {
+    #[serde(rename = "present")]
+    Present,
+    #[serde(rename = "missing")]
+    Missing,
+    #[serde(rename = "not_git_repo")]
+    NotGitRepo,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoStatus {
     pub name: String,
     pub path: String,
     pub branch: String,
     pub is_dirty: bool,
+    pub status: RepoAvailability,
     pub staged_count: usize,
     pub unstaged_count: usize,
     pub untracked_count: usize,

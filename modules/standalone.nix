@@ -36,11 +36,27 @@
       cargoLock.lockFile = ../Cargo.lock;
       cargoBuildFlags = "-p stitch-cli";
     };
+    tendMcpPkg = pkgs.rustPlatform.buildRustPackage {
+      pname = "tend-mcp";
+      version = "0.1.0";
+      src = ../.;
+      cargoLock.lockFile = ../Cargo.lock;
+      cargoBuildFlags = "-p tend-mcp";
+    };
+    stitchMcpPkg = pkgs.rustPlatform.buildRustPackage {
+      pname = "stitch-mcp";
+      version = "0.1.0";
+      src = ../.;
+      cargoLock.lockFile = ../Cargo.lock;
+      cargoBuildFlags = "-p stitch-mcp";
+    };
   in {
     packages.gate = tools;
     packages.tend = tendCliPkg;
     packages.stitch = stitchCliPkg;
-    packages.default = tools;
+    packages.tend-mcp = tendMcpPkg;
+    packages.stitch-mcp = stitchMcpPkg;
+    packages.default = tendCliPkg;
 
     apps.gate = {
       type = "app";
@@ -56,9 +72,17 @@
       type = "app";
       program = "${stitchCliPkg}/bin/stitch";
     };
+    apps.tend-mcp = {
+      type = "app";
+      program = "${tendMcpPkg}/bin/tend-mcp";
+    };
+    apps.stitch-mcp = {
+      type = "app";
+      program = "${stitchMcpPkg}/bin/stitch-mcp";
+    };
     apps.default = {
       type = "app";
-      program = "${tools}/bin/pt";
+      program = "${tendCliPkg}/bin/tend";
     };
   };
 }

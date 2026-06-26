@@ -10,7 +10,7 @@ pub fn execute() -> Result<(), String> {
         None => return Err("No active changeset.".to_string()),
     };
 
-    if cs.state != ChangesetState::Validated && cs.state != ChangesetState::Planned && cs.state != ChangesetState::CommittedPartial {
+    if cs.state != ChangesetState::Validated && cs.state != ChangesetState::CommittedPartial {
         return Err(format!("Changeset state '{}' does not support commit.", cs.state));
     }
 

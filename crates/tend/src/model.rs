@@ -97,6 +97,7 @@ pub struct Step {
     pub patterns: Vec<String>,
     pub always: bool,
     pub description: String,
+    pub expect: Option<ExpectConfig>,
 }
 
 impl From<&StepConfig> for Step {
@@ -108,6 +109,7 @@ impl From<&StepConfig> for Step {
             patterns: s.patterns.clone().unwrap_or_default(),
             always: s.always.unwrap_or(false),
             description: s.description.clone().unwrap_or_default(),
+            expect: None,
         }
     }
 }

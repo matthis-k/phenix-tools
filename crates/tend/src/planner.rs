@@ -25,11 +25,13 @@ pub struct PlanItem {
     pub node_path: std::path::PathBuf,
     pub config_path: std::path::PathBuf,
     pub task_id: String,
+    pub chain_id: String,
     pub description: String,
     pub kind: String,
     pub phase: String,
     pub step: Option<Step>,
     pub item_type: PlanItemType,
+    pub context: ContextConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,15 +77,21 @@ pub fn build_plan(
                 node_path: node.node_path.clone(),
                 config_path: node.config_path.clone(),
                 task_id: format!("{}.before", node.id),
+                chain_id: node.id.clone(),
                 description,
                 kind: step.kind.clone(),
                 phase: phase.to_string(),
                 step: Some(step),
                 item_type: PlanItemType::TaskBefore,
+                context: node.context.clone(),
             });
         }
 
         for task in &node.tasks {
+            if task.config.phase != phase {
+                continue;
+            }
+
             let task_applies = task_applies(task, mode, changed_files);
 
             if mode == "changed" && !task_applies {
@@ -103,17 +111,21 @@ pub fn build_plan(
                 return Err(PlanError::MutatingRefused(task.config.id.clone()));
             }
 
+            let task_chain_id = format!("{}.{}", node.id, task.config.id);
+
             for step_cfg in task.config.before.iter().flatten() {
                 let step = Step::from(step_cfg);
                 items.push(PlanItem {
                     node_path: node.node_path.clone(),
                     config_path: node.config_path.clone(),
                     task_id: format!("{}.before", task.config.id),
+                    chain_id: task_chain_id.clone(),
                     description: step.description.clone(),
                     kind: step.kind.clone(),
                     phase: phase.to_string(),
                     step: Some(step),
                     item_type: PlanItemType::TaskBefore,
+                    context: node.context.clone(),
                 });
             }
 
@@ -121,6 +133,7 @@ pub fn build_plan(
                 node_path: node.node_path.clone(),
                 config_path: node.config_path.clone(),
                 task_id: task.config.id.clone(),
+                chain_id: task_chain_id.clone(),
                 description: task
                     .config
                     .description
@@ -139,8 +152,10 @@ pub fn build_plan(
                         .description
                         .clone()
                         .unwrap_or_default(),
+                    expect: task.config.expect.clone(),
                 }),
                 item_type: PlanItemType::TaskAction,
+                context: node.context.clone(),
             });
 
             for step_cfg in task.config.after.iter().flatten() {
@@ -149,11 +164,13 @@ pub fn build_plan(
                     node_path: node.node_path.clone(),
                     config_path: node.config_path.clone(),
                     task_id: format!("{}.after", task.config.id),
+                    chain_id: task_chain_id.clone(),
                     description: step.description.clone(),
                     kind: step.kind.clone(),
                     phase: phase.to_string(),
                     step: Some(step),
                     item_type: PlanItemType::TaskAfter,
+                    context: node.context.clone(),
                 });
             }
         }
@@ -174,11 +191,13 @@ pub fn build_plan(
                 node_path: node.node_path.clone(),
                 config_path: node.config_path.clone(),
                 task_id: format!("{}.after", node.id),
+                chain_id: node.id.clone(),
                 description,
                 kind: step.kind.clone(),
                 phase: phase.to_string(),
                 step: Some(step),
                 item_type: PlanItemType::TaskAfter,
+                context: node.context.clone(),
             });
         }
     }

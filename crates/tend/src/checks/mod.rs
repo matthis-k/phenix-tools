@@ -52,9 +52,13 @@ impl CheckResult {
     }
 }
 
-pub fn dispatch_kind(step: &crate::model::Step, workdir: &std::path::Path) -> CheckResult {
+pub fn dispatch_kind(
+    step: &crate::model::Step,
+    workdir: &std::path::Path,
+    env: Option<&std::collections::HashMap<String, String>>,
+) -> CheckResult {
     match step.kind.as_str() {
-        "command" => command::run(step, workdir),
+        "command" => command::run(step, workdir, env),
         "filesExist" => files::run_exist(step, workdir),
         "filesAbsent" => files::run_absent(step, workdir),
         "forbidText" => text::run_forbid(step, workdir),

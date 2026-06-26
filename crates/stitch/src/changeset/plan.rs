@@ -25,7 +25,7 @@ pub fn execute(write: bool, json: bool) -> Result<(), String> {
             continue;
         }
 
-        let status = git::get_status(&repo_path)?;
+        let status = git::get_status(&repo_cfg.name, &repo_path)?;
         if status.is_dirty {
             rp.action = Some("commit".to_string());
             if rp.message.is_none() {

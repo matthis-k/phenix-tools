@@ -1,20 +1,16 @@
 use crate::changeset;
 use crate::config;
+use crate::model::ChangesetState;
 use crate::validate;
 
 pub fn execute(json: bool) -> Result<(), String> {
     let cfg = config::find_and_load()?;
-    let cs = match changeset::load_current()? {
+    let mut cs = match changeset::load_current()? {
         Some(cs) => cs,
         None => return Err("No active changeset. Run `stitch changeset new \"<title>\"` first.".to_string()),
     };
 
-    let mut errors = validate::validate_changeset(&cfg, &cs)?;
-
-    // Also check newxos mutation rule
-    if let Err(e) = changeset::verify_no_newxos_mutation(&cfg, &cs) {
-        errors.push(e);
-    }
+    let errors = validate::validate_changeset(&cfg, &cs)?;
 
     if json {
         let output = serde_json::to_string_pretty(&serde_json::json!({
@@ -38,6 +34,9 @@ pub fn execute(json: bool) -> Result<(), String> {
     if !errors.is_empty() {
         return Err("Validation failed".to_string());
     }
+
+    cs.state = ChangesetState::Validated;
+    changeset::save(&cs)?;
 
     Ok(())
 }

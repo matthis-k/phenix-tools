@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use clap::{Parser, Subcommand};
 
-use stitch::changeset;
 use stitch::config;
 use stitch::git;
 use stitch::graph;
@@ -28,12 +27,52 @@ fn main() {
             }
         },
         Commands::Push { dry_run, json: json_output } => cmd_push(*dry_run, *json_output),
-        Commands::Changeset { command } => changeset::dispatch(command),
+        Commands::Changeset { command } => cmd_changeset(command),
     };
 
     if let Err(e) = result {
         eprintln!("error: {}", e);
         std::process::exit(1);
+    }
+}
+
+fn cmd_changeset(command: &ChangesetCliCommand) -> Result<(), String> {
+    match command {
+        ChangesetCliCommand::New { title } => stitch::changeset::new::execute(title),
+        ChangesetCliCommand::Status { json } => {
+            let cs = stitch::changeset::load_current()?;
+            match cs {
+                Some(cs) => {
+                    if *json {
+                        let output = serde_json::to_string_pretty(&cs)
+                            .map_err(|e| format!("JSON: {}", e))?;
+                        println!("{}", output);
+                    } else {
+                        println!("Changeset: {} ({})", cs.id, cs.title);
+                        println!("State: {}", cs.state);
+                        println!("Workspace: {}", cs.workspace);
+                        println!();
+                        for rp in &cs.repos {
+                            let action = rp.action.as_deref().unwrap_or("-");
+                            let msg = rp.message.as_deref().unwrap_or("<missing>");
+                            let hash = rp.commit_hash.as_deref().unwrap_or("-");
+                            println!("  {}  action={}  message={}  hash={}", rp.name, action, msg, hash);
+                        }
+                    }
+                }
+                None => {
+                    println!("No active changeset.");
+                }
+            }
+            Ok(())
+        }
+        ChangesetCliCommand::Plan { write, json } => stitch::changeset::plan::execute(*write, *json),
+        ChangesetCliCommand::SetMessage { repo, message } => stitch::changeset::set_message::execute(repo, message),
+        ChangesetCliCommand::SetFiles { repo, files } => stitch::changeset::set_files::execute(repo, files),
+        ChangesetCliCommand::Validate { json } => stitch::changeset::validate::execute(*json),
+        ChangesetCliCommand::Commit => stitch::changeset::commit::execute(),
+        ChangesetCliCommand::Push => stitch::changeset::push::execute(),
+        ChangesetCliCommand::Abort => stitch::changeset::abort::execute(),
     }
 }
 
@@ -118,8 +157,58 @@ enum Commands {
     /// Manage changesets (legacy)
     Changeset {
         #[command(subcommand)]
-        command: changeset::ChangesetCommands,
+        command: ChangesetCliCommand,
     },
+}
+
+#[derive(Subcommand)]
+enum ChangesetCliCommand {
+    /// Create a new changeset
+    New {
+        /// Title for the new changeset
+        title: String,
+    },
+    /// Show current changeset status
+    Status {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Build/review a plan for the current changeset
+    Plan {
+        /// Write the plan to the active changeset
+        #[arg(long)]
+        write: bool,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set commit message for a repo in the changeset
+    SetMessage {
+        /// Repo name
+        repo: String,
+        /// Commit message
+        message: String,
+    },
+    /// Set tracked files for a repo in the changeset
+    SetFiles {
+        /// Repo name
+        repo: String,
+        /// Files to track
+        files: Vec<String>,
+    },
+    /// Validate the current changeset
+    Validate {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Commit the validated changeset
+    Commit,
+    /// Push committed changeset repos
+    Push,
+    /// Abort the current changeset
+    Abort,
 }
 
 fn cmd_repos() -> Result<(), String> {
