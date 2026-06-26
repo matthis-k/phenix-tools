@@ -629,6 +629,38 @@ fn cmd_push(dry_run: bool, json_output: bool) -> Result<(), String> {
     Ok(())
 }
 
+fn load_commit_messages(path: &str) -> Result<BTreeMap<String, String>, String> {
+    let content = std::fs::read_to_string(path).map_err(|e| format!("Read messages: {}", e))?;
+
+    let raw_value: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("Parse messages: {}", e))?;
+
+    let raw_messages = raw_value
+        .get("messages")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .or_else(|| raw_value.as_object().cloned())
+        .ok_or_else(|| "messages file must be an object or {\"messages\": {...}}".to_string())?;
+
+    let mut messages = BTreeMap::new();
+
+    for (key, val) in raw_messages {
+        let subject = val
+            .get("subject")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+
+        if subject.is_empty() {
+            return Err(format!("Missing commit subject for '{}'", key));
+        }
+
+        messages.insert(key, subject.to_string());
+    }
+
+    Ok(messages)
+}
+
 fn cmd_commit(
     dry_run: bool,
     json_output: bool,
@@ -675,14 +707,24 @@ fn cmd_commit(
     }
 
     if let Some(tx_id) = resume_id {
-        let result = sync::resume_sync(tx_id, &cfg, true)?;
+        let result = sync::resume_local_commit(tx_id, &cfg)?;
         println!("{}", sync::format_result_output(&result, json_output));
         return Ok(());
     }
 
     let dag = graph::discover_graph(&cfg)?;
     let statuses = status::collect_all(&cfg)?;
-    let plan = sync::plan_local_commit(&dag, &statuses, &cfg)?;
+    let mut plan = sync::plan_local_commit(&dag, &statuses, &cfg)?;
+
+    if let Some(ref selected_repo) = repo {
+        plan.actions.retain(|action| action.node() == selected_repo);
+        plan.node_plans.retain(|node, _| node == selected_repo);
+        plan.affected_nodes.retain(|node| node == selected_repo);
+
+        if plan.actions.is_empty() {
+            return Err(format!("Repo '{}' has no commit actions", selected_repo));
+        }
+    }
 
     if dry_run {
         println!("{}", sync::format_plan_output(&plan, json_output));
@@ -708,26 +750,57 @@ fn cmd_commit(
     }
 
     let mut messages: Option<BTreeMap<String, String>> = if let Some(path) = messages_path {
-        let content = std::fs::read_to_string(path).map_err(|e| format!("Read messages: {}", e))?;
-        let raw: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(&content).map_err(|e| format!("Parse messages: {}", e))?;
-        let mut msgs = BTreeMap::new();
-        for (key, val) in raw {
-            let msg = val
-                .get("subject")
-                .and_then(|v| v.as_str())
-                .unwrap_or(&key)
-                .to_string();
-            msgs.insert(key, msg);
-        }
-        Some(msgs)
+        Some(load_commit_messages(path)?)
     } else {
         None
     };
 
-    if let (Some(r), Some(m)) = (repo, message) {
+    if repo.is_none() {
+        if let Some(m) = message.clone() {
+            if plan.actions.len() != 1 {
+                return Err("--message requires --repo when more than one repo has changes".to_string());
+            }
+
+            let node = plan.actions[0].node().clone();
+            let subject = m.trim();
+
+            if subject.is_empty() {
+                return Err("--message must not be empty".to_string());
+            }
+
+            let msgs = messages.get_or_insert_with(BTreeMap::new);
+            msgs.insert(node, subject.to_string());
+        }
+    }
+
+    if let (Some(r), Some(m)) = (repo.clone(), message.clone()) {
+        let subject = m.trim();
+        if subject.is_empty() {
+            return Err("--message must not be empty".to_string());
+        }
+
         let msgs = messages.get_or_insert_with(BTreeMap::new);
-        msgs.insert(r, m);
+        msgs.insert(r, subject.to_string());
+    }
+
+    if !dry_run {
+        let provided = messages.as_ref();
+
+        for action in &plan.actions {
+            let node = action.node();
+
+            let has_message = provided
+                .and_then(|m| m.get(node))
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+
+            if !has_message {
+                return Err(format!(
+                    "Missing explicit commit message for '{}'. Use --messages or --repo <name> -m <message>.",
+                    node
+                ));
+            }
+        }
     }
 
     let result = sync::execute_local_commit_plan(&plan, &dag, &cfg, messages.as_ref(), force)?;

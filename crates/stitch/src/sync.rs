@@ -858,6 +858,10 @@ fn git_push(repo: &Path, branch: &str) -> Result<(), String> {
     crate::git::git_push(repo, branch)
 }
 
+pub fn resume_local_commit(tx_id: &str, cfg: &WorkspaceConfig) -> Result<ActionResult, String> {
+    resume_sync(tx_id, cfg, true)
+}
+
 pub fn resume_sync(
     transaction_id: &str,
     cfg: &WorkspaceConfig,
