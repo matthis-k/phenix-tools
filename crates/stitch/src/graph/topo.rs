@@ -98,7 +98,7 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
-    use crate::graph::{EdgeReason, NodeKind, WorkspaceNode, WorkspaceEdge};
+    use crate::graph::{EdgeReason, NodeKind, RepoRole, WorkspaceNode, WorkspaceEdge};
 
     fn make_node(id: &str, layer: Option<u32>) -> WorkspaceNode {
         WorkspaceNode {
@@ -106,6 +106,7 @@ mod tests {
             path: PathBuf::new(),
             repo_url: None,
             kind: NodeKind::Unknown,
+            role: RepoRole::Unknown,
             layer,
             is_root: false,
         }

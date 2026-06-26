@@ -14,5 +14,5 @@ pub use graph::{
     render::RenderFormat,
     topo::provider_before_consumer_order,
     validate::{validate_graph, DiagnosticSeverity, GraphDiagnostic, GraphValidationReport, ValidateOptions},
-    EdgeReason, ExternalInput, GraphSource, NodeKind, WorkspaceDag, WorkspaceEdge, WorkspaceNode,
+    EdgeReason, ExternalInput, GraphSource, NodeKind, RepoRole, WorkspaceDag, WorkspaceEdge, WorkspaceNode,
 };

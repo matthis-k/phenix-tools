@@ -25,6 +25,7 @@
       src = filteredSrc;
       cargoLock.lockFile = ../Cargo.lock;
       cargoBuildFlags = "-p tend-mcp";
+      nativeBuildInputs = [ pkgs.git ];
     };
     stitchMcpPkg = pkgs.rustPlatform.buildRustPackage {
       pname = "stitch-mcp";
@@ -32,6 +33,7 @@
       src = filteredSrc;
       cargoLock.lockFile = ../Cargo.lock;
       cargoBuildFlags = "-p stitch-mcp";
+      nativeBuildInputs = [ pkgs.git ];
     };
 
     # Reuse vendored crate dependencies from any buildRustPackage.

@@ -66,6 +66,7 @@ fn main() {
             *run_tend,
         ),
         Commands::Graph { command } => cmd_graph(command),
+        Commands::Topology { command } => cmd_topology(command),
         Commands::Changeset { command } => cmd_changeset(command),
     };
 
@@ -170,6 +171,53 @@ fn parse_format(s: &str) -> stitch::graph::RenderFormat {
         "json" => stitch::graph::RenderFormat::Json,
         "mermaid" => stitch::graph::RenderFormat::Mermaid,
         _ => stitch::graph::RenderFormat::Text,
+    }
+}
+
+fn cmd_topology(command: &TopologyCommand) -> Result<(), String> {
+    match command {
+        TopologyCommand::Check {
+            workspace,
+            config,
+            format,
+        } => {
+            let root = std::path::Path::new(workspace);
+            let config_path = std::path::Path::new(config);
+
+            let graph = stitch::graph::derive::derive_graph_from_locks(root, Some(config_path))
+                .map_err(|e| format!("Topology derivation failed: {e}"))?;
+
+            let report = stitch::graph::validate::validate_graph(
+                &graph,
+                &stitch::graph::ValidateOptions { strict: true },
+            );
+
+            let fmt = parse_format(format);
+            let output = stitch::graph::render::render_validation_report(&report, fmt)?;
+            println!("{output}");
+
+            if report.valid {
+                Ok(())
+            } else {
+                Err("Topology validation failed".to_string())
+            }
+        }
+        TopologyCommand::Graph {
+            workspace,
+            config,
+            format,
+        } => {
+            let root = std::path::Path::new(workspace);
+            let config_path = std::path::Path::new(config);
+
+            let graph = stitch::graph::derive::derive_graph_from_locks(root, Some(config_path))
+                .map_err(|e| format!("Topology derivation failed: {e}"))?;
+
+            let fmt = parse_format(format);
+            let output = stitch::graph::render::render_graph_derive(&graph, fmt)?;
+            println!("{output}");
+            Ok(())
+        }
     }
 }
 
@@ -320,6 +368,11 @@ enum Commands {
         #[command(subcommand)]
         command: GraphCliCommand,
     },
+    /// Topology operations: check, graph
+    Topology {
+        #[command(subcommand)]
+        command: TopologyCommand,
+    },
     /// Manage changesets (legacy, hidden)
     #[command(hide = true)]
     Changeset {
@@ -373,6 +426,28 @@ enum GraphCliCommand {
         source: String,
         #[arg(long, help = "Path to workspace metadata file")]
         metadata: Option<String>,
+        #[arg(long, default_value = "mermaid", help = "Output format: mermaid, json, text")]
+        format: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum TopologyCommand {
+    /// Validate workspace topology against the layer model
+    Check {
+        #[arg(long, default_value = ".", help = "Root workspace path")]
+        workspace: String,
+        #[arg(long, default_value = ".stitch/topology.json", help = "Path to topology config")]
+        config: String,
+        #[arg(long, default_value = "text", help = "Output format: text, json")]
+        format: String,
+    },
+    /// Render workspace topology as a graph
+    Graph {
+        #[arg(long, default_value = ".", help = "Root workspace path")]
+        workspace: String,
+        #[arg(long, default_value = ".stitch/topology.json", help = "Path to topology config")]
+        config: String,
         #[arg(long, default_value = "mermaid", help = "Output format: mermaid, json, text")]
         format: String,
     },

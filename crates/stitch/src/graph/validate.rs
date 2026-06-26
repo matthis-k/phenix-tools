@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::graph::{NodeKind, WorkspaceDag, WorkspaceEdge};
+use crate::graph::{NodeKind, RepoRole, WorkspaceDag, WorkspaceEdge, WorkspaceNode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DiagnosticSeverity {
@@ -104,7 +105,7 @@ pub fn validate_graph(
         ));
     }
 
-    // 3. Layer rule: provider.layer <= consumer.layer
+    // 3. Layer rule: consumer layer must be > provider layer (errors by default)
     for edge in &graph.edges {
         let from_node = match graph.nodes.get(&edge.from) {
             Some(n) => n,
@@ -115,21 +116,18 @@ pub fn validate_graph(
             None => continue,
         };
 
+        if from_node.is_root {
+            continue;
+        }
+
         if let (Some(from_layer), Some(to_layer)) = (from_node.layer, to_node.layer) {
-            // Edge direction: consumer (from) -> provider (to)
-            // provider.layer <= consumer.layer
-            if to_layer > from_layer {
+            if to_layer >= from_layer {
                 let msg = format!(
-                    "layer violation: '{}' (layer {}) -> '{}' (layer {}): provider layer must be <= consumer layer",
+                    "layer violation: '{}' (layer {}) -> '{}' (layer {}): dependencies must point to lower layers",
                     edge.from, from_layer, edge.to, to_layer
                 );
-                let sev = if opts.strict {
-                    DiagnosticSeverity::Error
-                } else {
-                    DiagnosticSeverity::Warning
-                };
                 diagnostics.push(GraphDiagnostic {
-                    severity: sev,
+                    severity: DiagnosticSeverity::Error,
                     code: "layer_violation".to_string(),
                     message: msg,
                     nodes: vec![edge.from.clone(), edge.to.clone()],
@@ -173,7 +171,7 @@ pub fn validate_graph(
         }
     }
 
-    // 5. Provider/consumer rule: providers should not depend on consumers
+    // 5. Hard role rules
     for edge in &graph.edges {
         let from_node = match graph.nodes.get(&edge.from) {
             Some(n) => n,
@@ -184,22 +182,31 @@ pub fn validate_graph(
             None => continue,
         };
 
-        if from_node.kind.is_provider() && to_node.kind.is_consumer() {
-            diagnostics.push(GraphDiagnostic::error(
-                "provider_depends_on_consumer",
-                format!(
-                    "'{}' ({}) depends on '{}' ({}): providers must not depend on consumers",
-                    edge.from,
-                    node_kind_name(&from_node.kind),
-                    edge.to,
-                    node_kind_name(&to_node.kind)
-                ),
-                vec![edge.from.clone(), edge.to.clone()],
-            ));
+        validate_role_edge(from_node, to_node, edge, &mut diagnostics);
+    }
+
+    // 6. Folder prefix layer check
+    for (_, node) in &graph.nodes {
+        if node.role != RepoRole::Root {
+            if let (Some(config_layer), Some(path_layer)) = (node.layer, folder_layer(&node.path)) {
+                if config_layer != path_layer {
+                    diagnostics.push(GraphDiagnostic::error(
+                        "path_layer_mismatch",
+                        format!(
+                            "'{}' configured layer {} but path '{}' indicates layer {}",
+                            node.id,
+                            config_layer,
+                            node.path.display(),
+                            path_layer
+                        ),
+                        vec![node.id.clone()],
+                    ));
+                }
+            }
         }
     }
 
-    // 6. Duplicate edge warnings
+    // 7. Duplicate edge warnings
     let mut seen_edges: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
     for edge in &graph.edges {
         let key = (edge.from.clone(), edge.to.clone());
@@ -212,7 +219,7 @@ pub fn validate_graph(
         }
     }
 
-    // 7. External conflict warnings (simplified: just show recorded externals)
+    // 8. External conflict warnings
     if !graph.external_inputs.is_empty() {
         let mut by_name: BTreeMap<String, Vec<&str>> = BTreeMap::new();
         for ext in &graph.external_inputs {
@@ -253,6 +260,77 @@ pub fn validate_graph(
         node_count: graph.nodes.len(),
         edge_count: graph.edges.len(),
     }
+}
+
+fn validate_role_edge(
+    from: &WorkspaceNode,
+    to: &WorkspaceNode,
+    _edge: &WorkspaceEdge,
+    diagnostics: &mut Vec<GraphDiagnostic>,
+) {
+    // Only check non-root edges
+    if from.is_root {
+        return;
+    }
+
+    // Root dependency: already checked above
+    if to.is_root {
+        return;
+    }
+
+    // Producer depends on producer
+    if from.role == RepoRole::Producer && to.role == RepoRole::Producer {
+        diagnostics.push(GraphDiagnostic::error(
+            "producer_depends_on_producer",
+            format!(
+                "'{}' is a producer and may not depend on producer '{}'; use protocols or integrations",
+                from.id, to.id
+            ),
+            vec![from.id.clone(), to.id.clone()],
+        ));
+    }
+
+    // Producer depends on pkgs-aggregator
+    if from.role == RepoRole::Producer && to.role == RepoRole::PkgsAggregator {
+        diagnostics.push(GraphDiagnostic::error(
+            "producer_depends_on_pkgs_aggregator",
+            format!(
+                "'{}' is a producer and may not depend on package aggregator '{}'; use pkgs-base",
+                from.id, to.id
+            ),
+            vec![from.id.clone(), to.id.clone()],
+        ));
+    }
+
+    // Provider depends on consumer (from old model - keep for compat)
+    if from.kind.is_provider() && to.kind.is_consumer() {
+        diagnostics.push(GraphDiagnostic::error(
+            "provider_depends_on_consumer",
+            format!(
+                "'{}' ({}) depends on '{}' ({}): providers must not depend on consumers",
+                from.id,
+                node_kind_name(&from.kind),
+                to.id,
+                node_kind_name(&to.kind)
+            ),
+            vec![from.id.clone(), to.id.clone()],
+        ));
+    }
+}
+
+fn folder_layer(path: &Path) -> Option<u32> {
+    let mut components = path.components().peekable();
+
+    while let Some(component) = components.next() {
+        let c = component.as_os_str().to_string_lossy();
+        if c == "flakes" {
+            let layer_component = components.next()?.as_os_str().to_string_lossy();
+            let number = layer_component.split('-').next()?;
+            return number.parse::<u32>().ok();
+        }
+    }
+
+    None
 }
 
 fn node_kind_name(kind: &NodeKind) -> &'static str {
@@ -325,14 +403,15 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::path::PathBuf;
-    use crate::graph::{EdgeReason, NodeKind, WorkspaceNode};
+    use crate::graph::{EdgeReason, NodeKind, RepoRole};
 
-    fn make_node(id: &str, kind: NodeKind, layer: Option<u32>, is_root: bool) -> WorkspaceNode {
+    fn make_node(id: &str, kind: NodeKind, role: RepoRole, layer: Option<u32>, is_root: bool) -> WorkspaceNode {
         WorkspaceNode {
             id: id.to_string(),
             path: PathBuf::new(),
             repo_url: None,
             kind,
+            role,
             layer,
             is_root,
         }
@@ -361,12 +440,27 @@ mod tests {
         }
     }
 
+    fn make_node_old(id: &str, kind: NodeKind, layer: Option<u32>, is_root: bool) -> WorkspaceNode {
+        let role = match kind {
+            NodeKind::Pins => RepoRole::Pins,
+            NodeKind::PackageProvider => RepoRole::PkgsAggregator,
+            NodeKind::ToolProvider => RepoRole::Producer,
+            NodeKind::ShellProvider => RepoRole::Producer,
+            NodeKind::DesktopProvider => RepoRole::Consumer,
+            NodeKind::HostConsumer => RepoRole::Consumer,
+            NodeKind::WorkspaceRoot => RepoRole::Root,
+            NodeKind::External => RepoRole::External,
+            NodeKind::Unknown => RepoRole::Unknown,
+        };
+        make_node(id, kind, role, layer, is_root)
+    }
+
     #[test]
     fn test_cycle_detection() {
         let nodes = vec![
-            make_node("a", NodeKind::Unknown, None, false),
-            make_node("b", NodeKind::Unknown, None, false),
-            make_node("c", NodeKind::Unknown, None, false),
+            make_node_old("a", NodeKind::Unknown, None, false),
+            make_node_old("b", NodeKind::Unknown, None, false),
+            make_node_old("c", NodeKind::Unknown, None, false),
         ];
         let edges = vec![
             make_edge("a", "b"),
@@ -382,39 +476,36 @@ mod tests {
     #[test]
     fn test_layer_violation() {
         let nodes = vec![
-            make_node("pins", NodeKind::Pins, Some(0), false),
-            make_node("hosts", NodeKind::HostConsumer, Some(3), false),
+            make_node_old("pins", NodeKind::Pins, Some(0), false),
+            make_node_old("hosts", NodeKind::HostConsumer, Some(5), false),
         ];
         let edges = vec![make_edge("pins", "hosts")];
         let graph = make_graph(nodes, edges);
         let report = validate_graph(&graph, &ValidateOptions::default());
-        // pins(layer 0) -> hosts(layer 3) means provider(3) > consumer(0), violation
         assert!(report.diagnostics.iter().any(|d| d.code == "layer_violation"));
     }
 
     #[test]
     fn test_layer_ok() {
         let nodes = vec![
-            make_node("hosts", NodeKind::HostConsumer, Some(3), false),
-            make_node("pins", NodeKind::Pins, Some(0), false),
+            make_node_old("hosts", NodeKind::HostConsumer, Some(5), false),
+            make_node_old("pins", NodeKind::Pins, Some(0), false),
         ];
         let edges = vec![make_edge("hosts", "pins")];
         let graph = make_graph(nodes, edges);
         let report = validate_graph(&graph, &ValidateOptions::default());
-        // Edge consumer(hosts, 3) -> provider(pins, 0): provider(0) <= consumer(3) ✓
         assert!(!report.diagnostics.iter().any(|d| d.code == "layer_violation"));
     }
 
     #[test]
     fn test_no_layer_violation() {
         let nodes = vec![
-            make_node("hosts", NodeKind::HostConsumer, Some(3), false),
-            make_node("pins", NodeKind::Pins, Some(0), false),
+            make_node_old("hosts", NodeKind::HostConsumer, Some(5), false),
+            make_node_old("pins", NodeKind::Pins, Some(0), false),
         ];
         let edges = vec![make_edge("hosts", "pins")];
         let graph = make_graph(nodes, edges);
         let report = validate_graph(&graph, &ValidateOptions::default());
-        // Edge consumer(hosts, 3) -> provider(pins, 0): provider(0) <= consumer(3) ✓
         assert!(!report.diagnostics.iter().any(|d| d.code == "layer_violation"));
         assert!(report.valid);
     }
@@ -422,8 +513,8 @@ mod tests {
     #[test]
     fn test_root_dependency_violation() {
         let nodes = vec![
-            make_node("phenix-tools", NodeKind::ToolProvider, Some(1), false),
-            make_node("phenix", NodeKind::WorkspaceRoot, Some(4), true),
+            make_node_old("phenix-tools", NodeKind::ToolProvider, Some(2), false),
+            make_node_old("phenix", NodeKind::WorkspaceRoot, Some(6), true),
         ];
         let edges = vec![make_edge("phenix-tools", "phenix")];
         let graph = make_graph(nodes, edges);
@@ -433,26 +524,43 @@ mod tests {
     }
 
     #[test]
-    fn test_provider_depends_on_consumer() {
+    fn test_producer_depends_on_producer() {
         let nodes = vec![
-            make_node("pins", NodeKind::Pins, Some(0), false),
-            make_node("hosts", NodeKind::HostConsumer, Some(3), false),
+            make_node("tools", NodeKind::ToolProvider, RepoRole::Producer, Some(2), false),
+            make_node("nvim", NodeKind::ToolProvider, RepoRole::Producer, Some(2), false),
+            make_node("pins", NodeKind::Pins, RepoRole::Pins, Some(0), false),
         ];
-        let edges = vec![make_edge("pins", "hosts")];
+        let edges = vec![
+            make_edge("tools", "pins"),
+            make_edge("tools", "nvim"),
+        ];
         let graph = make_graph(nodes, edges);
         let report = validate_graph(&graph, &ValidateOptions::default());
         assert!(!report.valid);
-        assert!(report.diagnostics.iter().any(|d| d.code == "provider_depends_on_consumer"));
+        assert!(report.diagnostics.iter().any(|d| d.code == "producer_depends_on_producer"));
+    }
+
+    #[test]
+    fn test_producer_depends_on_pkgs_aggregator() {
+        let nodes = vec![
+            make_node("tools", NodeKind::ToolProvider, RepoRole::Producer, Some(2), false),
+            make_node("pkgs", NodeKind::PackageProvider, RepoRole::PkgsAggregator, Some(4), false),
+        ];
+        let edges = vec![make_edge("tools", "pkgs")];
+        let graph = make_graph(nodes, edges);
+        let report = validate_graph(&graph, &ValidateOptions::default());
+        assert!(!report.valid);
+        assert!(report.diagnostics.iter().any(|d| d.code == "producer_depends_on_pkgs_aggregator"));
     }
 
     #[test]
     fn test_valid_graph() {
         let nodes = vec![
-            make_node("phenix-pins", NodeKind::Pins, Some(0), false),
-            make_node("phenix-packages", NodeKind::PackageProvider, Some(1), false),
-            make_node("phenix-tools", NodeKind::ToolProvider, Some(1), false),
-            make_node("phenix-hosts", NodeKind::HostConsumer, Some(3), false),
-            make_node("phenix", NodeKind::WorkspaceRoot, Some(4), true),
+            make_node_old("phenix-pins", NodeKind::Pins, Some(0), false),
+            make_node("phenix-packages", NodeKind::PackageProvider, RepoRole::PkgsAggregator, Some(4), false),
+            make_node_old("phenix-tools", NodeKind::ToolProvider, Some(2), false),
+            make_node_old("phenix-hosts", NodeKind::HostConsumer, Some(5), false),
+            make_node_old("phenix", NodeKind::WorkspaceRoot, Some(6), true),
         ];
         let edges = vec![
             make_edge("phenix-packages", "phenix-pins"),
@@ -471,8 +579,8 @@ mod tests {
     #[test]
     fn test_cycle_report_string() {
         let nodes = vec![
-            make_node("a", NodeKind::Unknown, None, false),
-            make_node("b", NodeKind::Unknown, None, false),
+            make_node_old("a", NodeKind::Unknown, None, false),
+            make_node_old("b", NodeKind::Unknown, None, false),
         ];
         let edges = vec![make_edge("a", "b"), make_edge("b", "a")];
         let graph = make_graph(nodes, edges);
@@ -480,5 +588,17 @@ mod tests {
         let cycle_diag = report.diagnostics.iter().find(|d| d.code == "cycle_detected").unwrap();
         assert!(cycle_diag.message.contains("a"));
         assert!(cycle_diag.message.contains("b"));
+    }
+
+    #[test]
+    fn test_folder_layer() {
+        let p = Path::new("flakes/02-producers/phenix-tools");
+        assert_eq!(folder_layer(p), Some(2));
+
+        let p = Path::new("/abs/flakes/05-consumers/phenix-hosts");
+        assert_eq!(folder_layer(p), Some(5));
+
+        let p = Path::new("some/other/path");
+        assert_eq!(folder_layer(p), None);
     }
 }

@@ -271,7 +271,7 @@ mod tests {
     fn test_build_workspace_aliases() {
         use std::collections::BTreeMap;
         use std::path::PathBuf;
-        use crate::graph::{NodeKind, WorkspaceNode};
+        use crate::graph::{NodeKind, RepoRole, WorkspaceNode};
 
         let mut nodes = BTreeMap::new();
         nodes.insert(
@@ -281,6 +281,7 @@ mod tests {
                 path: PathBuf::from("."),
                 repo_url: Some("git@github.com:matthis-k/phenix-tools.git".to_string()),
                 kind: NodeKind::Unknown,
+                role: RepoRole::Unknown,
                 layer: None,
                 is_root: false,
             },

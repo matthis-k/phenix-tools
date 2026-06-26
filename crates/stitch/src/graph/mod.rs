@@ -30,7 +30,7 @@ pub enum GraphSource {
     Json,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeKind {
     Pins,
     PackageProvider,
@@ -60,12 +60,61 @@ impl NodeKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RepoRole {
+    Pins,
+    Lib,
+    PkgsBase,
+    Protocols,
+    Producer,
+    Integration,
+    PkgsAggregator,
+    Consumer,
+    Root,
+    External,
+    Unknown,
+}
+
+impl RepoRole {
+    pub fn layer(self) -> Option<u32> {
+        Some(match self {
+            RepoRole::Pins => 0,
+            RepoRole::Lib | RepoRole::PkgsBase | RepoRole::Protocols => 1,
+            RepoRole::Producer => 2,
+            RepoRole::Integration => 3,
+            RepoRole::PkgsAggregator => 4,
+            RepoRole::Consumer => 5,
+            RepoRole::Root => 6,
+            RepoRole::External => 255,
+            RepoRole::Unknown => return None,
+        })
+    }
+
+    pub fn is_root(self) -> bool {
+        matches!(self, RepoRole::Root)
+    }
+
+    pub fn is_producer(self) -> bool {
+        self == RepoRole::Producer
+    }
+
+    pub fn is_consumer(self) -> bool {
+        self == RepoRole::Consumer
+    }
+
+    pub fn is_pkgs_aggregator(self) -> bool {
+        self == RepoRole::PkgsAggregator
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceNode {
     pub id: String,
     pub path: PathBuf,
     pub repo_url: Option<String>,
     pub kind: NodeKind,
+    pub role: RepoRole,
     pub layer: Option<u32>,
     pub is_root: bool,
 }
