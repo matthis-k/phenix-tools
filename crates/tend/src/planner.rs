@@ -788,7 +788,7 @@ mod tests {
         let node = make_node("root", vec![task]);
         // Task with no profiles should match when profile is "manual"
         let plan = build_plan(
-            &[node.clone()],
+            std::slice::from_ref(&node),
             &req_with_profile(Phase::Verify, RunMode::Full, Some("manual")),
         )
         .unwrap();

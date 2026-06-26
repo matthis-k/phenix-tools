@@ -7,9 +7,13 @@
     nixpkgs.follows = "phenix-pins/nixpkgs";
   };
 
-  outputs = inputs@{ flake-parts, ... }:
+  outputs =
+    inputs@{ flake-parts, ... }:
     flake-parts.lib.mkFlake { inherit inputs; } {
-      systems = [ "x86_64-linux" "aarch64-linux" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+      ];
       imports = [ ./modules/standalone.nix ];
       flake.flakeModules.default = import ./modules/flake-module.nix;
     };

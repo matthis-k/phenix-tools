@@ -55,7 +55,7 @@ pub fn derive_graph_from_locks(
     root: &Path,
     metadata: Option<&Path>,
 ) -> Result<WorkspaceDag, GraphError> {
-    let discovery = discover_inventory(root, metadata).map_err(|e| GraphError::Io(e))?;
+    let discovery = discover_inventory(root, metadata).map_err(GraphError::Io)?;
     let aliases = build_workspace_aliases(&discovery.nodes);
 
     let mut graph = WorkspaceDag::new(discovery.nodes);

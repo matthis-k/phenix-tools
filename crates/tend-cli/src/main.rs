@@ -543,7 +543,7 @@ fn base64_decode(input: &str) -> Option<String> {
 
     let cleaned: String = input.chars().filter(|c| !c.is_whitespace()).collect();
     let bytes = cleaned.as_bytes();
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return None;
     }
 

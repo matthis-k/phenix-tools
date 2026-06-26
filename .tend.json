@@ -11,25 +11,6 @@
     },
     "tasks": [
       {
-        "id": "tend-crate-files",
-        "phase": "verify",
-        "kind": "filesExist",
-        "profiles": ["git-hook", "pre-push", "manual", "nix-check"],
-        "tags": ["tend", "fast"],
-        "sandbox_safe": true,
-        "paths": [
-          "crates/tend/Cargo.toml",
-          "crates/tend/src/lib.rs",
-          "crates/tend-cli/Cargo.toml",
-          "crates/tend-cli/src/main.rs"
-        ],
-        "when": {
-          "changed": {
-            "paths": ["crates/**"]
-          }
-        }
-      },
-      {
         "id": "rustfmt-check",
         "description": "Check Rust formatting",
         "phase": "verify",
@@ -98,6 +79,57 @@
         }
       },
       {
+        "id": "nixfmt-check",
+        "description": "Check Nix files are formatted correctly",
+        "phase": "verify",
+        "kind": "command",
+        "command": ["bash", "-c", "find modules -name '*.nix' -print0 | xargs -0 -r nixfmt --check && find . -maxdepth 1 -name '*.nix' -print0 | xargs -0 -r nixfmt --check"],
+        "profiles": ["git-hook", "pre-push", "manual", "nix-check"],
+        "tags": ["nix", "format"],
+        "sandbox_safe": true,
+        "mutates": false,
+        "always": true,
+        "when": {
+          "changed": {
+            "paths": ["modules/**/*.nix"]
+          }
+        }
+      },
+      {
+        "id": "statix-check",
+        "description": "Lint Nix files with statix",
+        "phase": "verify",
+        "kind": "command",
+        "command": ["statix", "check"],
+        "profiles": ["git-hook", "pre-push", "manual", "nix-check"],
+        "tags": ["nix", "lint"],
+        "sandbox_safe": true,
+        "mutates": false,
+        "always": true,
+        "when": {
+          "changed": {
+            "paths": ["modules/**/*.nix"]
+          }
+        }
+      },
+      {
+        "id": "deadnix-check",
+        "description": "Find and report dead Nix code",
+        "phase": "verify",
+        "kind": "command",
+        "command": ["deadnix", "--fail", "--no-lambda-arg", "--no-lambda-pattern-names"],
+        "profiles": ["git-hook", "pre-push", "manual", "nix-check"],
+        "tags": ["nix", "cleanup"],
+        "sandbox_safe": true,
+        "mutates": false,
+        "always": true,
+        "when": {
+          "changed": {
+            "paths": ["modules/**/*.nix"]
+          }
+        }
+      },
+      {
         "id": "rustfmt-fix",
         "description": "Fix Rust formatting",
         "phase": "fix",
@@ -110,6 +142,38 @@
         "when": {
           "changed": {
             "paths": ["Cargo.toml", "Cargo.lock", "crates/**/*.rs"]
+          }
+        }
+      },
+      {
+        "id": "nixfmt-fix",
+        "description": "Auto-format Nix files",
+        "phase": "fix",
+        "kind": "command",
+        "command": ["bash", "-c", "find modules -name '*.nix' -print0 | xargs -0 -r nixfmt && find . -maxdepth 1 -name '*.nix' -print0 | xargs -0 -r nixfmt"],
+        "profiles": ["fix"],
+        "tags": ["nix", "format", "fix"],
+        "sandbox_safe": false,
+        "mutates": true,
+        "when": {
+          "changed": {
+            "paths": ["modules/**/*.nix"]
+          }
+        }
+      },
+      {
+        "id": "statix-fix",
+        "description": "Auto-fix statix warnings where safe",
+        "phase": "fix",
+        "kind": "command",
+        "command": ["statix", "fix"],
+        "profiles": ["fix"],
+        "tags": ["nix", "lint", "fix"],
+        "sandbox_safe": false,
+        "mutates": true,
+        "when": {
+          "changed": {
+            "paths": ["modules/**/*.nix"]
           }
         }
       }

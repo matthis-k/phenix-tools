@@ -53,15 +53,9 @@ impl GraphDiagnostic {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ValidateOptions {
     pub strict: bool,
-}
-
-impl Default for ValidateOptions {
-    fn default() -> Self {
-        ValidateOptions { strict: false }
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -183,7 +177,7 @@ pub fn validate_graph(graph: &WorkspaceDag, opts: &ValidateOptions) -> GraphVali
     }
 
     // 6. Folder prefix layer check
-    for (_, node) in &graph.nodes {
+    for node in graph.nodes.values() {
         if node.role != RepoRole::Root {
             if let (Some(config_layer), Some(path_layer)) = (node.layer, folder_layer(&node.path)) {
                 if config_layer != path_layer {

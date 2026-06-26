@@ -201,7 +201,7 @@ fn render_order_mermaid(graph: &WorkspaceDag, order: &[String]) -> Result<String
 }
 
 fn mermaid_id(id: &str) -> String {
-    id.replace('-', "_").replace('.', "_")
+    id.replace(['-', '.'], "_")
 }
 
 fn mermaid_label(node: &super::WorkspaceNode) -> String {

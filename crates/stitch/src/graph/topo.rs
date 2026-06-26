@@ -86,7 +86,7 @@ pub fn provider_before_consumer_order(graph: &WorkspaceDag) -> Result<Vec<String
     Ok(out)
 }
 
-fn sort_ready(ready: &mut Vec<String>, graph: &WorkspaceDag) {
+fn sort_ready(ready: &mut [String], graph: &WorkspaceDag) {
     ready.sort_by(|a, b| {
         let layer_a = graph.nodes.get(a).and_then(|n| n.layer).unwrap_or(u32::MAX);
         let layer_b = graph.nodes.get(b).and_then(|n| n.layer).unwrap_or(u32::MAX);

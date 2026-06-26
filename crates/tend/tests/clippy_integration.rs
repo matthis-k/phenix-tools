@@ -169,8 +169,11 @@ fn cargo_clippy_fails_on_warnings() {
     let root = dir.path();
 
     init_git_repo(root);
-    // Code that triggers a clippy warning: integer suffix on `1`
-    setup_minimal_crate(root, "pub fn add_one(x: i32) -> i32 { x + 1i32 }\n");
+    // Code that triggers a clippy warning: dropping a Copy type
+    setup_minimal_crate(
+        root,
+        "pub fn add_one(x: i32) -> i32 { std::mem::drop(x); x + 1 }\n",
+    );
 
     let config = r#"{
         "version": 1,
