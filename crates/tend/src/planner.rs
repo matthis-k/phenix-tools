@@ -181,6 +181,8 @@ pub fn build_plan(nodes: &[ResolvedNode], req: &PlanRequest) -> Result<Plan, Pla
                 PlanReason::ExplicitSelection
             };
 
+            let task_context = merge_context(&node.context, task.config.context.as_ref());
+
             for step_cfg in task.config.before.iter().flatten() {
                 let step = Step::from(step_cfg);
                 items.push(PlanItem {
@@ -192,7 +194,7 @@ pub fn build_plan(nodes: &[ResolvedNode], req: &PlanRequest) -> Result<Plan, Pla
                     phase,
                     step,
                     item_type: PlanItemType::TaskBefore,
-                    context: node.context.clone(),
+                    context: task_context.clone(),
                     reason: PlanReason::BeforeAfter,
                     matched_files: Vec::new(),
                 });
@@ -212,7 +214,7 @@ pub fn build_plan(nodes: &[ResolvedNode], req: &PlanRequest) -> Result<Plan, Pla
                     description: task.config.description.clone().unwrap_or_default(),
                 },
                 item_type: PlanItemType::TaskAction,
-                context: node.context.clone(),
+                context: task_context.clone(),
                 reason,
                 matched_files: matched,
             });
@@ -228,7 +230,7 @@ pub fn build_plan(nodes: &[ResolvedNode], req: &PlanRequest) -> Result<Plan, Pla
                     phase,
                     step,
                     item_type: PlanItemType::TaskAfter,
-                    context: node.context.clone(),
+                    context: task_context.clone(),
                     reason: PlanReason::BeforeAfter,
                     matched_files: Vec::new(),
                 });
@@ -380,6 +382,25 @@ fn should_run_step(step: &Step) -> bool {
     }
 }
 
+pub fn merge_context(node: &ContextConfig, task: Option<&ContextConfig>) -> ContextConfig {
+    let Some(task) = task else {
+        return node.clone();
+    };
+
+    let mut env = node.env.clone().unwrap_or_default();
+    if let Some(task_env) = &task.env {
+        for (k, v) in task_env {
+            env.insert(k.clone(), v.clone());
+        }
+    }
+
+    ContextConfig {
+        workdir: task.workdir.clone().or_else(|| node.workdir.clone()),
+        env: if env.is_empty() { None } else { Some(env) },
+        shell: task.shell.clone().or_else(|| node.shell.clone()),
+    }
+}
+
 fn task_step_kind_from_config(cfg: &TaskConfig) -> crate::model::TaskKind {
     cfg.kind.clone()
 }
@@ -454,6 +475,39 @@ mod tests {
                     command,
                     expect: None,
                 },
+                context: None,
+                tags: None,
+                profiles: None,
+                mutates: Some(mutates),
+                interactive: None,
+                network: None,
+                sandbox_safe: None,
+                when: None,
+                always: None,
+                before: None,
+                after: None,
+            },
+            parent_node_path: Path::new(".").to_path_buf(),
+        }
+    }
+
+    fn make_command_task_with_context(
+        id: &str,
+        phase: Phase,
+        mutates: bool,
+        command: Vec<String>,
+        context: Option<ContextConfig>,
+    ) -> ResolvedTask {
+        ResolvedTask {
+            config: TaskConfig {
+                id: id.to_string(),
+                description: None,
+                phase,
+                kind: TaskKind::Command {
+                    command,
+                    expect: None,
+                },
+                context,
                 tags: None,
                 profiles: None,
                 mutates: Some(mutates),
@@ -480,6 +534,7 @@ mod tests {
             context: ContextConfig {
                 workdir: None,
                 env: None,
+                shell: None,
             },
             before: vec![],
             after: vec![],
@@ -531,6 +586,7 @@ mod tests {
                     command: vec!["echo".to_string(), "hello".to_string()],
                     expect: None,
                 },
+                context: None,
                 tags: None,
                 profiles: Some(profiles.iter().map(|s| s.to_string()).collect()),
                 mutates: Some(false),
@@ -556,6 +612,7 @@ mod tests {
                     command: vec!["echo".to_string(), "hello".to_string()],
                     expect: None,
                 },
+                context: None,
                 tags: None,
                 profiles: Some(profiles.iter().map(|s| s.to_string()).collect()),
                 mutates: Some(mutates),
@@ -694,5 +751,132 @@ mod tests {
         let node = make_node("root", vec![task]);
         let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("non-existent"))).unwrap();
         assert_eq!(plan.items.len(), 0);
+    }
+
+    #[test]
+    fn test_merge_context_workdir_task_overrides() {
+        let node = ContextConfig {
+            workdir: Some(WorkdirPolicy::ConfigDir),
+            env: None,
+            shell: None,
+        };
+        let task = ContextConfig {
+            workdir: Some(WorkdirPolicy::Relative("sub".to_string())),
+            env: None,
+            shell: None,
+        };
+        let merged = merge_context(&node, Some(&task));
+        assert_eq!(
+            format!("{:?}", merged.workdir),
+            format!("{:?}", Some(WorkdirPolicy::Relative("sub".to_string())))
+        );
+    }
+
+    #[test]
+    fn test_merge_context_shell_task_overrides() {
+        let node = ContextConfig {
+            workdir: None,
+            env: None,
+            shell: Some(ShellConfig {
+                flake: Some(".".to_string()),
+                name: Some("default".to_string()),
+                impure: None,
+                accept_flake_config: None,
+                extra_args: None,
+            }),
+        };
+        let task = ContextConfig {
+            workdir: None,
+            env: None,
+            shell: Some(ShellConfig {
+                flake: Some(".".to_string()),
+                name: Some("test".to_string()),
+                impure: None,
+                accept_flake_config: None,
+                extra_args: None,
+            }),
+        };
+        let merged = merge_context(&node, Some(&task));
+        assert_eq!(merged.shell.as_ref().unwrap().name.as_deref(), Some("test"));
+    }
+
+    #[test]
+    fn test_merge_context_env_overlaid() {
+        let node = ContextConfig {
+            workdir: None,
+            env: Some([("A".to_string(), "1".to_string())].into()),
+            shell: None,
+        };
+        let task = ContextConfig {
+            workdir: None,
+            env: Some([("B".to_string(), "2".to_string())].into()),
+            shell: None,
+        };
+        let merged = merge_context(&node, Some(&task));
+        let env = merged.env.unwrap();
+        assert_eq!(env.get("A").unwrap(), "1");
+        assert_eq!(env.get("B").unwrap(), "2");
+    }
+
+    #[test]
+    fn test_merge_context_env_task_overrides_node() {
+        let node = ContextConfig {
+            workdir: None,
+            env: Some([("KEY".to_string(), "node".to_string())].into()),
+            shell: None,
+        };
+        let task = ContextConfig {
+            workdir: None,
+            env: Some([("KEY".to_string(), "task".to_string())].into()),
+            shell: None,
+        };
+        let merged = merge_context(&node, Some(&task));
+        assert_eq!(merged.env.unwrap().get("KEY").unwrap(), "task");
+    }
+
+    #[test]
+    fn test_merge_context_shell_task_full_override() {
+        let node = ContextConfig {
+            workdir: None,
+            env: None,
+            shell: Some(ShellConfig {
+                flake: Some(".".to_string()),
+                name: Some("default".to_string()),
+                impure: None,
+                accept_flake_config: None,
+                extra_args: None,
+            }),
+        };
+        let merged = merge_context(&node, None);
+        assert_eq!(merged.shell.as_ref().unwrap().name.as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn test_task_context_shell_appears_in_plan() {
+        let task_context = ContextConfig {
+            workdir: None,
+            env: None,
+            shell: Some(ShellConfig {
+                flake: Some(".".to_string()),
+                name: Some("test".to_string()),
+                impure: None,
+                accept_flake_config: None,
+                extra_args: None,
+            }),
+        };
+        let task = make_command_task_with_context(
+            "shell-task",
+            Phase::Verify,
+            false,
+            vec!["echo".to_string(), "hi".to_string()],
+            Some(task_context),
+        );
+        let node = make_node("root", vec![task]);
+        let plan = build_plan(&[node], &req(Phase::Verify, RunMode::Full)).unwrap();
+        assert_eq!(plan.items.len(), 1);
+        assert_eq!(
+            plan.items[0].context.shell.as_ref().unwrap().name.as_deref(),
+            Some("test")
+        );
     }
 }

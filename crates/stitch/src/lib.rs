@@ -6,3 +6,13 @@ pub mod model;
 pub mod status;
 pub mod sync;
 pub mod validate;
+
+pub use graph::{
+    derive::derive_graph_from_locks,
+    inventory::{discover_inventory, InventoryOptions},
+    lock::parse_flake_lock,
+    render::RenderFormat,
+    topo::provider_before_consumer_order,
+    validate::{validate_graph, DiagnosticSeverity, GraphDiagnostic, GraphValidationReport, ValidateOptions},
+    EdgeReason, ExternalInput, GraphSource, NodeKind, WorkspaceDag, WorkspaceEdge, WorkspaceNode,
+};

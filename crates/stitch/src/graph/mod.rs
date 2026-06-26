@@ -6,6 +6,105 @@ use serde::{Deserialize, Serialize};
 use crate::git;
 use crate::model::WorkspaceConfig;
 
+pub mod derive;
+pub mod inventory;
+pub mod lock;
+pub mod render;
+pub mod topo;
+pub mod validate;
+
+pub use derive::derive_graph_from_locks;
+pub use inventory::{discover_inventory, InventoryOptions, WorkspaceDiscovery};
+pub use lock::parse_flake_lock;
+pub use render::RenderFormat;
+pub use topo::provider_before_consumer_order;
+pub use validate::{validate_graph, DiagnosticSeverity, GraphDiagnostic, GraphValidationReport, ValidateOptions};
+
+// ---------------------------------------------------------------------------
+// Lock-derived graph types (new subsystem)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GraphSource {
+    Locks,
+    Json,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NodeKind {
+    Pins,
+    PackageProvider,
+    ToolProvider,
+    ShellProvider,
+    DesktopProvider,
+    HostConsumer,
+    WorkspaceRoot,
+    External,
+    Unknown,
+}
+
+impl NodeKind {
+    pub fn is_provider(&self) -> bool {
+        matches!(
+            self,
+            NodeKind::Pins
+                | NodeKind::PackageProvider
+                | NodeKind::ToolProvider
+                | NodeKind::ShellProvider
+                | NodeKind::DesktopProvider
+        )
+    }
+
+    pub fn is_consumer(&self) -> bool {
+        matches!(self, NodeKind::HostConsumer)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceNode {
+    pub id: String,
+    pub path: PathBuf,
+    pub repo_url: Option<String>,
+    pub kind: NodeKind,
+    pub layer: Option<u32>,
+    pub is_root: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceEdge {
+    pub from: String,
+    pub to: String,
+    pub reason: EdgeReason,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EdgeReason {
+    FlakeInput {
+        input_name: String,
+        lock_file: PathBuf,
+    },
+    Manual {
+        source_file: PathBuf,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalInput {
+    pub owner_node: String,
+    pub input_name: String,
+    pub locked_type: Option<String>,
+    pub url_or_repo: Option<String>,
+    pub rev: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceDag {
+    pub nodes: BTreeMap<String, WorkspaceNode>,
+    pub edges: Vec<WorkspaceEdge>,
+    pub external_inputs: Vec<ExternalInput>,
+    pub diagnostics: Vec<GraphDiagnostic>,
+}
+
 pub type NodeId = String;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

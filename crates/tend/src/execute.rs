@@ -40,9 +40,11 @@ pub fn execute_plan(items: &[PlanItem], _root: &Path) -> Vec<ExecutionResult> {
         let workdir = effective_workdir(item, _root);
         let env = item.context.env.as_ref();
 
+        let shell = item.context.shell.as_ref();
+
         let check_result = match &item.step.kind {
             TaskKind::Command { command, expect } => {
-                checks::command::run_command(command, expect.as_ref(), &workdir, env)
+                checks::command::run_command(command, expect.as_ref(), &workdir, env, shell)
             }
             TaskKind::FilesExist { paths } => checks::files::run_exist(paths, &workdir),
             TaskKind::FilesAbsent { paths } => checks::files::run_absent(paths, &workdir),

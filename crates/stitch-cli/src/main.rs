@@ -65,12 +65,111 @@ fn main() {
             repos,
             *run_tend,
         ),
+        Commands::Graph { command } => cmd_graph(command),
         Commands::Changeset { command } => cmd_changeset(command),
     };
 
     if let Err(e) = result {
         eprintln!("error: {}", e);
         std::process::exit(1);
+    }
+}
+
+fn cmd_graph(command: &GraphCliCommand) -> Result<(), String> {
+    match command {
+        GraphCliCommand::Derive {
+            workspace,
+            source: _source,
+            metadata,
+            format,
+        } => {
+            let root = std::path::Path::new(workspace);
+            let meta_path = metadata.as_ref().map(|p| std::path::Path::new(p).to_path_buf());
+            let meta_ref = meta_path.as_deref();
+
+            let graph = stitch::graph::derive::derive_graph_from_locks(root, meta_ref)
+                .map_err(|e| format!("Graph derivation failed: {e}"))?;
+
+            let fmt = parse_format(format);
+            let output = stitch::graph::render::render_graph_derive(&graph, fmt)?;
+            println!("{output}");
+            Ok(())
+        }
+        GraphCliCommand::Verify {
+            workspace,
+            source: _source,
+            metadata,
+            strict,
+            format,
+        } => {
+            let root = std::path::Path::new(workspace);
+            let meta_path = metadata.as_ref().map(|p| std::path::Path::new(p).to_path_buf());
+            let meta_ref = meta_path.as_deref();
+
+            let graph = stitch::graph::derive::derive_graph_from_locks(root, meta_ref)
+                .map_err(|e| format!("Graph derivation failed: {e}"))?;
+
+            let opts = stitch::graph::ValidateOptions {
+                strict: *strict,
+            };
+            let report = stitch::graph::validate::validate_graph(&graph, &opts);
+            let fmt = parse_format(format);
+            let output = stitch::graph::render::render_validation_report(&report, fmt)?;
+            println!("{output}");
+
+            if !report.valid {
+                Err("Graph validation failed".to_string())
+            } else {
+                Ok(())
+            }
+        }
+        GraphCliCommand::Order {
+            workspace,
+            source: _source,
+            metadata,
+            format,
+        } => {
+            let root = std::path::Path::new(workspace);
+            let meta_path = metadata.as_ref().map(|p| std::path::Path::new(p).to_path_buf());
+            let meta_ref = meta_path.as_deref();
+
+            let graph = stitch::graph::derive::derive_graph_from_locks(root, meta_ref)
+                .map_err(|e| format!("Graph derivation failed: {e}"))?;
+
+            let order = stitch::graph::topo::provider_before_consumer_order(&graph)
+                .map_err(|e| format!("Topological sort failed: {e}"))?;
+
+            let fmt = parse_format(format);
+            let output = stitch::graph::render::render_order(&graph, &order, fmt)?;
+            println!("{output}");
+            Ok(())
+        }
+        GraphCliCommand::Print {
+            workspace,
+            source: _source,
+            metadata,
+            format,
+        } => {
+            let root = std::path::Path::new(workspace);
+            let meta_path = metadata.as_ref().map(|p| std::path::Path::new(p).to_path_buf());
+            let meta_ref = meta_path.as_deref();
+
+            let graph = stitch::graph::derive::derive_graph_from_locks(root, meta_ref)
+                .map_err(|e| format!("Graph derivation failed: {e}"))?;
+
+            let fmt = parse_format(format);
+            let output = stitch::graph::render::render_graph_derive(&graph, fmt)?;
+            println!("{output}");
+            Ok(())
+        }
+    }
+}
+
+fn parse_format(s: &str) -> stitch::graph::RenderFormat {
+    match s {
+        "json" => stitch::graph::RenderFormat::Json,
+        "mermaid" => stitch::graph::RenderFormat::Mermaid,
+        _ => stitch::graph::RenderFormat::Text,
     }
 }
 
@@ -216,11 +315,66 @@ enum Commands {
         #[arg(long, help = "Run tend checks before sync")]
         run_tend: bool,
     },
+    /// Graph operations: derive, verify, order, print
+    Graph {
+        #[command(subcommand)]
+        command: GraphCliCommand,
+    },
     /// Manage changesets (legacy, hidden)
     #[command(hide = true)]
     Changeset {
         #[command(subcommand)]
         command: ChangesetCliCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum GraphCliCommand {
+    /// Derive workspace graph from lock files or metadata
+    Derive {
+        #[arg(long, default_value = ".", help = "Root workspace path")]
+        workspace: String,
+        #[arg(long, default_value = "locks", help = "Source: locks or json")]
+        source: String,
+        #[arg(long, help = "Path to workspace metadata file")]
+        metadata: Option<String>,
+        #[arg(long, default_value = "text", help = "Output format: text, json, mermaid")]
+        format: String,
+    },
+    /// Validate workspace graph topology
+    Verify {
+        #[arg(long, default_value = ".", help = "Root workspace path")]
+        workspace: String,
+        #[arg(long, default_value = "locks", help = "Source: locks or json")]
+        source: String,
+        #[arg(long, help = "Path to workspace metadata file")]
+        metadata: Option<String>,
+        #[arg(long, help = "Enable strict mode (warnings become errors)")]
+        strict: bool,
+        #[arg(long, default_value = "text", help = "Output format: text, json")]
+        format: String,
+    },
+    /// Show provider-before-consumer order
+    Order {
+        #[arg(long, default_value = ".", help = "Root workspace path")]
+        workspace: String,
+        #[arg(long, default_value = "locks", help = "Source: locks or json")]
+        source: String,
+        #[arg(long, help = "Path to workspace metadata file")]
+        metadata: Option<String>,
+        #[arg(long, default_value = "text", help = "Output format: text, json")]
+        format: String,
+    },
+    /// Print workspace graph
+    Print {
+        #[arg(long, default_value = ".", help = "Root workspace path")]
+        workspace: String,
+        #[arg(long, default_value = "locks", help = "Source: locks or json")]
+        source: String,
+        #[arg(long, help = "Path to workspace metadata file")]
+        metadata: Option<String>,
+        #[arg(long, default_value = "mermaid", help = "Output format: mermaid, json, text")]
+        format: String,
     },
 }
 

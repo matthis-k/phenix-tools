@@ -137,10 +137,21 @@ impl WorkdirPolicy {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellConfig {
+    pub flake: Option<String>,
+    pub name: Option<String>,
+    pub impure: Option<bool>,
+    pub accept_flake_config: Option<bool>,
+    pub extra_args: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ContextConfig {
     pub workdir: Option<WorkdirPolicy>,
     pub env: Option<std::collections::HashMap<String, String>>,
+    pub shell: Option<ShellConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,6 +171,7 @@ pub struct TaskConfig {
     pub phase: Phase,
     #[serde(flatten)]
     pub kind: TaskKind,
+    pub context: Option<ContextConfig>,
     pub tags: Option<Vec<String>>,
     pub profiles: Option<Vec<String>>,
     pub mutates: Option<bool>,

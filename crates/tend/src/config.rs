@@ -47,6 +47,7 @@ pub fn resolve_node(
     let context = config.context.unwrap_or(crate::model::ContextConfig {
         workdir: None,
         env: None,
+        shell: None,
     });
 
     let tasks: Vec<ResolvedTask> = config

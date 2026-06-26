@@ -223,5 +223,17 @@
         echo "  stitch: $(stitch --version 2>/dev/null || echo '?')"
       '';
     };
+
+    devShells.test = pkgs.mkShell {
+      name = "phenix-tools-test";
+
+      packages = [
+        pkgs.git
+        pkgs.nix
+        pkgs.jq
+        tendCliPkg
+        stitchCliPkg
+      ];
+    };
   };
 }
