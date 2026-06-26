@@ -2,14 +2,6 @@
   perSystem = { config, pkgs, ... }: let
     filteredSrc = lib.cleanSource ../.;
 
-    tools = pkgs.rustPlatform.buildRustPackage {
-      pname = "phenix-tools";
-      version = "0.1.0";
-      src = filteredSrc;
-      cargoLock.lockFile = ../Cargo.lock;
-      cargoBuildFlags = "-p pt-compat";
-      nativeBuildInputs = [ pkgs.git ];
-    };
     tendCliPkg = pkgs.rustPlatform.buildRustPackage {
       pname = "tend";
       version = "0.1.0";
@@ -27,21 +19,6 @@
       nativeBuildInputs = [ pkgs.git ];
     };
 
-    # Legacy packages (deprecated)
-    tendPkg = pkgs.rustPlatform.buildRustPackage {
-      pname = "tend-legacy";
-      version = "0.1.0";
-      src = filteredSrc;
-      cargoLock.lockFile = ../Cargo.lock;
-      cargoBuildFlags = "-p tend-cli";
-    };
-    stitchPkg = pkgs.rustPlatform.buildRustPackage {
-      pname = "stitch-legacy";
-      version = "0.1.0";
-      src = filteredSrc;
-      cargoLock.lockFile = ../Cargo.lock;
-      cargoBuildFlags = "-p stitch-cli";
-    };
     tendMcpPkg = pkgs.rustPlatform.buildRustPackage {
       pname = "tend-mcp";
       version = "0.1.0";
@@ -92,8 +69,7 @@
       '';
   in {
     packages = {
-      gate = tools;
-      inherit tools tendCliPkg stitchCliPkg tendMcpPkg stitchMcpPkg;
+      inherit tendCliPkg stitchCliPkg tendMcpPkg stitchMcpPkg;
       tend = tendCliPkg;
       stitch = stitchCliPkg;
       tend-mcp = tendMcpPkg;
@@ -181,12 +157,6 @@
     };
 
     apps = {
-      gate = {
-        type = "app";
-        program = "${pkgs.writeShellScriptBin "phenix-gate" ''
-          exec ${tools}/bin/pt gate "$@"
-        ''}/bin/phenix-gate";
-      };
       tend = {
         type = "app";
         program = "${tendCliPkg}/bin/tend";

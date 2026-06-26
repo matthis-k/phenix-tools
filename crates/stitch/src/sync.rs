@@ -4,7 +4,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::git;
-use crate::graph::{FlakeNode, NodeId, WorkspaceGraph};
+use crate::graph::{NodeId, WorkspaceGraph};
 #[allow(unused_imports)]
 use crate::model::{RepoAvailability, RepoStatus, WorkspaceConfig};
 
@@ -256,10 +256,6 @@ pub fn plan_commit(
 
     for node_id in &topo_order {
         let is_dirty = dirty_nodes.contains(node_id);
-        let node = match graph.get_node(node_id) {
-            Some(n) => n,
-            None => continue,
-        };
 
         let mut deps_to_update = Vec::new();
         for edge in graph.dependencies_of(node_id) {
@@ -295,7 +291,7 @@ pub fn plan_commit(
             String::new()
         };
 
-        let validation_commands = load_validation_commands(node, graph)?;
+        let validation_commands: Vec<Vec<String>> = Vec::new();
 
         plan_nodes.insert(
             node_id.clone(),
@@ -380,44 +376,6 @@ pub fn plan_commit(
         node_plans,
         blocked_reasons,
     })
-}
-
-fn load_validation_commands(
-    node: &FlakeNode,
-    _graph: &WorkspaceGraph,
-) -> Result<Vec<Vec<String>>, String> {
-    let sync_path = node.path.join("sync.json");
-    if sync_path.exists() {
-        let content =
-            std::fs::read_to_string(&sync_path).map_err(|e| format!("Read sync.json: {}", e))?;
-        let sync: crate::graph::SyncJson =
-            serde_json::from_str(&content).map_err(|e| format!("Parse sync.json: {}", e))?;
-        let commands: Vec<Vec<String>> = sync.checks.iter().map(|c| shlex_split(c)).collect();
-        return Ok(commands);
-    }
-    Ok(Vec::new())
-}
-
-fn shlex_split(cmd: &str) -> Vec<String> {
-    let mut args = Vec::new();
-    let mut current = String::new();
-    let mut in_quote = false;
-    for c in cmd.chars() {
-        match c {
-            '"' => in_quote = !in_quote,
-            ' ' if !in_quote => {
-                if !current.is_empty() {
-                    args.push(current.clone());
-                    current.clear();
-                }
-            }
-            _ => current.push(c),
-        }
-    }
-    if !current.is_empty() {
-        args.push(current);
-    }
-    args
 }
 
 pub struct ActionResult {
@@ -1064,40 +1022,23 @@ pub fn resume_sync(
                 }
             }
             Action::Validate { node: node_id } => {
+                // Validation is delegated to `tend plan/run`.
+                // See docs/workflows/agent-check-flow.md for the recommended workflow.
                 let node_path = resume_journal
                     .nodes
                     .get(node_id)
                     .map(|n| n.path.clone())
                     .unwrap_or_default();
-                let sync_path = Path::new(&node_path).join("sync.json");
-                let commands: Vec<Vec<String>> = if sync_path.exists() {
-                    let content = std::fs::read_to_string(&sync_path)
-                        .map_err(|e| format!("Read sync.json: {}", e))?;
-                    let sync: crate::graph::SyncJson = serde_json::from_str(&content)
-                        .map_err(|e| format!("Parse sync.json: {}", e))?;
-                    sync.checks.iter().map(|c| shlex_split(c)).collect()
-                } else {
-                    Vec::new()
-                };
-
-                for cmd_parts in &commands {
-                    if cmd_parts.is_empty() {
-                        continue;
-                    }
-                    let output = std::process::Command::new(&cmd_parts[0])
-                        .args(&cmd_parts[1..])
-                        .current_dir(&node_path)
-                        .output()
-                        .map_err(|e| format!("Validation command failed: {}", e))?;
-                    if !output.status.success() {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        return Err(format!(
-                            "Validation failed in '{}' during resume: {} {}",
-                            node_id,
-                            cmd_parts.join(" "),
-                            stderr.trim()
-                        ));
-                    }
+                let status = std::process::Command::new("tend")
+                    .args(["run", "--mode", "changed", "--phase", "verify"])
+                    .current_dir(&node_path)
+                    .status()
+                    .map_err(|e| format!("Failed to run tend: {}", e))?;
+                if !status.success() {
+                    return Err(format!(
+                        "Validation failed in '{}' during resume",
+                        node_id,
+                    ));
                 }
 
                 if let Some(e) = resume_journal

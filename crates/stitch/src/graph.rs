@@ -9,16 +9,6 @@ use crate::model::WorkspaceConfig;
 pub type NodeId = String;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncJson {
-    #[serde(rename = "dependsOn", default)]
-    pub depends_on: Vec<String>,
-    #[serde(rename = "updateInputs", default)]
-    pub update_inputs: Vec<String>,
-    #[serde(default)]
-    pub checks: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlakeNode {
     pub id: NodeId,
     pub name: String,
@@ -191,26 +181,7 @@ pub fn discover_graph(cfg: &WorkspaceConfig) -> Result<WorkspaceGraph, String> {
 
     for repo in &cfg.repos {
         let repo_path = repo.resolved_path(cfg);
-        let sync_path = repo_path.join("sync.json");
-
-        let deps: Vec<(String, String)> = if sync_path.exists() {
-            let sync_json = load_sync_json(&sync_path)?;
-            sync_json
-                .depends_on
-                .iter()
-                .enumerate()
-                .map(|(i, dep_name)| {
-                    let input_name = sync_json
-                        .update_inputs
-                        .get(i)
-                        .cloned()
-                        .unwrap_or_else(|| dep_name.clone());
-                    (dep_name.clone(), input_name)
-                })
-                .collect()
-        } else {
-            scan_flake_inputs(&repo_path, cfg)?
-        };
+        let deps: Vec<(String, String)> = scan_flake_inputs(&repo_path, cfg)?;
 
         for (dep_name, input_name) in &deps {
             if !nodes.contains_key(dep_name) {
@@ -277,12 +248,6 @@ fn scan_flake_inputs(
     }
 
     Ok(deps)
-}
-
-fn load_sync_json(path: &Path) -> Result<SyncJson, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-    serde_json::from_str(&content).map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
 }
 
 #[cfg(test)]

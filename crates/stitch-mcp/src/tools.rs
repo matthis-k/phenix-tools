@@ -709,44 +709,6 @@ impl McpTool for StitchCommitTool {
     }
 }
 
-pub struct StitchCommitSyncTool;
-
-impl McpTool for StitchCommitSyncTool {
-    fn name(&self) -> &str {
-        "stitch.commit_sync"
-    }
-    fn description(&self) -> &str {
-        "Alias for stitch.commit. DAG-wide sync commit is now the default."
-    }
-    fn metadata(&self) -> ToolMetadata {
-        tool_meta(MutationLevel::CreatesCommit)
-    }
-    fn input_schema(&self) -> Value {
-        json!({
-            "apply": { "type": "boolean", "description": "Must be true to execute" },
-            "dry_run": { "type": "boolean", "description": "Plan mode (no mutations)" },
-            "no_push": { "type": "boolean", "description": "Commit locally without pushing" },
-            "force": { "type": "boolean", "description": "Allow edge cases like detached HEAD" },
-            "messages": {
-                "type": "object",
-                "description": "Keyed by node name, each with subject, body",
-                "additionalProperties": {
-                    "type": "object",
-                    "properties": {
-                        "subject": { "type": "string" },
-                        "body": { "type": "string" }
-                    }
-                }
-            },
-            "resume": { "type": "string", "description": "Transaction ID to resume" }
-        })
-    }
-    fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolFailure> {
-        // Delegate to stitch.commit
-        StitchCommitTool.call(input, ctx)
-    }
-}
-
 pub struct StitchSyncTool;
 
 impl McpTool for StitchSyncTool {
@@ -796,7 +758,7 @@ impl McpTool for StitchSyncTool {
 
         let result = ToolResult::ok(
             json!({ "completed": [], "failed": [] }),
-            "Use stitch.commit_sync for DAG sync commit operations. This tool is for pull/rebase flows.",
+            "Use stitch.commit for DAG sync commit operations. This tool is for pull/rebase flows.",
             &audit_id,
         );
         Ok(serde_json::to_value(&result).unwrap_or_default())
