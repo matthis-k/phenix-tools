@@ -17,7 +17,11 @@ impl McpRoot {
             path.clone()
         };
         let uri = format!("file://{}", canonical.display());
-        Self { uri, path: canonical, writable }
+        Self {
+            uri,
+            path: canonical,
+            writable,
+        }
     }
 
     pub fn contains(&self, target: &Path) -> bool {
@@ -73,7 +77,7 @@ impl RootValidator {
 }
 
 mod dunce {
-    use std::path::{Path, PathBuf, Component};
+    use std::path::{Component, Path, PathBuf};
 
     pub fn canonicalize(path: &Path) -> Result<PathBuf, std::io::Error> {
         if path.exists() {
@@ -90,9 +94,15 @@ mod dunce {
         for component in path.components() {
             match component {
                 Component::ParentDir => {
-                    if components.last().map_or(false, |c| matches!(c, Component::Normal(_))) {
+                    if components
+                        .last()
+                        .is_some_and(|c| matches!(c, Component::Normal(_)))
+                    {
                         components.pop();
-                    } else if components.last().map_or(true, |c| !matches!(c, Component::RootDir)) {
+                    } else if components
+                        .last()
+                        .is_none_or(|c| !matches!(c, Component::RootDir))
+                    {
                         components.push(component);
                     }
                 }

@@ -10,7 +10,11 @@ pub fn execute(json: bool) -> Result<(), String> {
 
     let cs = match cs {
         Some(cs) => cs,
-        None => return Err("No active changeset. Run `stitch changeset new \"<title>\"` first.".to_string()),
+        None => {
+            return Err(
+                "No active changeset. Run `stitch changeset new \"<title>\"` first.".to_string(),
+            )
+        }
     };
 
     let errors = validate_changeset(&cfg, &cs)?;
@@ -26,7 +30,11 @@ pub fn execute(json: bool) -> Result<(), String> {
         if errors.is_empty() {
             println!("Changeset '{}' is valid.", cs.id);
         } else {
-            println!("Changeset '{}' has {} validation error(s):", cs.id, errors.len());
+            println!(
+                "Changeset '{}' has {} validation error(s):",
+                cs.id,
+                errors.len()
+            );
             for e in &errors {
                 println!("  - {}", e);
             }
@@ -49,7 +57,10 @@ pub fn validate_changeset(cfg: &WorkspaceConfig, cs: &Changeset) -> Result<Vec<S
         let repo_cfg = match repo_cfg {
             Some(r) => r,
             None => {
-                errors.push(format!("Repo '{}' in changeset is not in workspace config", rp.name));
+                errors.push(format!(
+                    "Repo '{}' in changeset is not in workspace config",
+                    rp.name
+                ));
                 continue;
             }
         };
@@ -58,7 +69,10 @@ pub fn validate_changeset(cfg: &WorkspaceConfig, cs: &Changeset) -> Result<Vec<S
 
         // Check repo exists
         if !repo_path.exists() {
-            errors.push(format!("Repo path '{}' does not exist", repo_path.display()));
+            errors.push(format!(
+                "Repo path '{}' does not exist",
+                repo_path.display()
+            ));
             continue;
         }
 
@@ -70,8 +84,11 @@ pub fn validate_changeset(cfg: &WorkspaceConfig, cs: &Changeset) -> Result<Vec<S
 
         // If committing, must have a message
         if rp.action.as_deref() == Some("commit") {
-            if rp.message.as_ref().map_or(true, |m| m.trim().is_empty()) {
-                errors.push(format!("Repo '{}' has action 'commit' but no message", rp.name));
+            if rp.message.as_ref().is_none_or(|m| m.trim().is_empty()) {
+                errors.push(format!(
+                    "Repo '{}' has action 'commit' but no message",
+                    rp.name
+                ));
             }
 
             // Check selected files exist

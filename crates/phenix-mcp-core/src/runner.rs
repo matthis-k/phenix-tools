@@ -6,6 +6,12 @@ use crate::types::CommandResult;
 
 pub struct CommandRunner;
 
+impl Default for CommandRunner {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl CommandRunner {
     pub fn new() -> Self {
         Self
@@ -38,7 +44,8 @@ impl CommandRunner {
                 }
             }
         } else {
-            cmd.output().map_err(|e| format!("Failed to execute command: {}", e))?
+            cmd.output()
+                .map_err(|e| format!("Failed to execute command: {}", e))?
         };
 
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -72,7 +79,9 @@ fn run_with_timeout(
     loop {
         match child.try_wait() {
             Ok(Some(_status)) => {
-                let output = child.wait_with_output().map_err(|e| format!("Wait: {}", e))?;
+                let output = child
+                    .wait_with_output()
+                    .map_err(|e| format!("Wait: {}", e))?;
                 return Ok(output);
             }
             Ok(None) => {

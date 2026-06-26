@@ -42,8 +42,8 @@ fn status_cmd(json: bool) -> Result<(), String> {
     match cs {
         Some(cs) => {
             if json {
-                let output = serde_json::to_string_pretty(&cs)
-                    .map_err(|e| format!("JSON: {}", e))?;
+                let output =
+                    serde_json::to_string_pretty(&cs).map_err(|e| format!("JSON: {}", e))?;
                 println!("{}", output);
             } else {
                 println!("Changeset: {} ({})", cs.id, cs.title);
@@ -54,7 +54,10 @@ fn status_cmd(json: bool) -> Result<(), String> {
                     let action = rp.action.as_deref().unwrap_or("-");
                     let msg = rp.message.as_deref().unwrap_or("<missing>");
                     let hash = rp.commit_hash.as_deref().unwrap_or("-");
-                    println!("  {}  action={}  message={}  hash={}", rp.name, action, msg, hash);
+                    println!(
+                        "  {}  action={}  message={}  hash={}",
+                        rp.name, action, msg, hash
+                    );
                 }
             }
         }
@@ -103,7 +106,7 @@ pub fn load_current() -> Result<Option<Changeset>, String> {
     let mut entries: Vec<_> = std::fs::read_dir(&cs_dir)
         .map_err(|e| format!("Failed to read {}: {}", cs_dir.display(), e))?
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
         .collect();
 
     entries.sort_by_key(|e| e.path());
@@ -124,8 +127,7 @@ pub fn save(cs: &Changeset) -> Result<(), String> {
         .map_err(|e| format!("Failed to create {}: {}", cs_dir.display(), e))?;
 
     let cs_path = changeset_path(&cs.id);
-    let content = serde_json::to_string_pretty(cs)
-        .map_err(|e| format!("JSON serialize: {}", e))?;
+    let content = serde_json::to_string_pretty(cs).map_err(|e| format!("JSON serialize: {}", e))?;
     std::fs::write(&cs_path, &content)
         .map_err(|e| format!("Failed to write {}: {}", cs_path.display(), e))?;
 
@@ -139,8 +141,7 @@ pub fn save(cs: &Changeset) -> Result<(), String> {
 pub fn clear_plan_file() -> Result<(), String> {
     let plan_p = plan_path();
     if plan_p.exists() {
-        std::fs::remove_file(&plan_p)
-            .map_err(|e| format!("Failed to remove plan file: {}", e))?;
+        std::fs::remove_file(&plan_p).map_err(|e| format!("Failed to remove plan file: {}", e))?;
     }
     Ok(())
 }

@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 
@@ -252,7 +254,11 @@ impl McpServer {
             "notifications/initialized" => None,
             "notifications/cancelled" => None,
             "tools/list" => {
-                let tools_json: Vec<Value> = self.tools.iter().map(|t| tool_to_json(t.as_ref())).collect();
+                let tools_json: Vec<Value> = self
+                    .tools
+                    .iter()
+                    .map(|t| tool_to_json(t.as_ref()))
+                    .collect();
                 Some(json!({
                     "jsonrpc": "2.0",
                     "id": id,
@@ -273,7 +279,9 @@ impl McpServer {
 
                         if let Err(e) = self.context.safety.check_mutation(&meta.mutation) {
                             let failure = ToolFailure::new(
-                                crate::result::ErrorKind::PolicyDenied, &e, &_audit_id,
+                                crate::result::ErrorKind::PolicyDenied,
+                                &e,
+                                &_audit_id,
                             );
                             return Some(json!({
                                 "jsonrpc": "2.0",
@@ -288,7 +296,9 @@ impl McpServer {
                             }));
                         }
 
-                        if meta.allowed_roots_only == Some(true) && !self.context.roots.roots().is_empty() {
+                        if meta.allowed_roots_only == Some(true)
+                            && !self.context.roots.roots().is_empty()
+                        {
                             let root_paths = extract_rootable_paths(arguments);
                             let active_root = &self.context.roots.roots()[0];
                             for p in &root_paths {
@@ -300,7 +310,11 @@ impl McpServer {
                                 if let Err(e) = self.context.roots.validate_path(&resolved) {
                                     let failure = ToolFailure::new(
                                         crate::result::ErrorKind::RootViolation,
-                                        &format!("Path '{}' is outside declared roots: {}", p.display(), e),
+                                        format!(
+                                            "Path '{}' is outside declared roots: {}",
+                                            p.display(),
+                                            e
+                                        ),
                                         &_audit_id,
                                     );
                                     return Some(json!({
@@ -319,7 +333,10 @@ impl McpServer {
                         }
 
                         if meta.mutation.requires_apply() {
-                            let apply = arguments.get("apply").and_then(|v| v.as_bool()).unwrap_or(false);
+                            let apply = arguments
+                                .get("apply")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
                             if !apply {
                                 let failure = ToolFailure::new(
                                     crate::result::ErrorKind::PolicyDenied,
@@ -343,53 +360,50 @@ impl McpServer {
                         let result = t.call(arguments.clone(), &self.context);
 
                         match result {
-                            Ok(data) => {
-                                Some(json!({
-                                    "jsonrpc": "2.0",
-                                    "id": id,
-                                    "result": {
-                                        "content": [
-                                            {
-                                                "type": "text",
-                                                "text": serde_json::to_string(&data).unwrap_or_default()
-                                            }
-                                        ],
-                                        "isError": false
-                                    }
-                                }))
-                            }
-                            Err(failure) => {
-                                Some(json!({
-                                    "jsonrpc": "2.0",
-                                    "id": id,
-                                    "result": {
-                                        "content": [
-                                            {
-                                                "type": "text",
-                                                "text": serde_json::to_string(&failure).unwrap_or_default()
-                                            }
-                                        ],
-                                        "isError": true
-                                    }
-                                }))
-                            }
+                            Ok(data) => Some(json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": {
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": serde_json::to_string(&data).unwrap_or_default()
+                                        }
+                                    ],
+                                    "isError": false
+                                }
+                            })),
+                            Err(failure) => Some(json!({
+                                "jsonrpc": "2.0",
+                                "id": id,
+                                "result": {
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": serde_json::to_string(&failure).unwrap_or_default()
+                                        }
+                                    ],
+                                    "isError": true
+                                }
+                            })),
                         }
                     }
-                    None => {
-                        Some(json!({
-                            "jsonrpc": "2.0",
-                            "id": id,
-                            "error": {
-                                "code": -32601,
-                                "message": format!("Tool not found: {}", name)
-                            }
-                        }))
-                    }
+                    None => Some(json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {
+                            "code": -32601,
+                            "message": format!("Tool not found: {}", name)
+                        }
+                    })),
                 }
             }
             "resources/list" => {
-                let resources_json: Vec<Value> =
-                    self.resources.iter().map(|r| resource_to_json(r.as_ref())).collect();
+                let resources_json: Vec<Value> = self
+                    .resources
+                    .iter()
+                    .map(|r| resource_to_json(r.as_ref()))
+                    .collect();
                 Some(json!({
                     "jsonrpc": "2.0",
                     "id": id,
@@ -402,50 +416,45 @@ impl McpServer {
                 let resource = self.resources.iter().find(|r| r.uri() == uri);
 
                 match resource {
-                    Some(r) => {
-                        match r.read(&self.context) {
-                            Ok(data) => {
-                                Some(json!({
-                                    "jsonrpc": "2.0",
-                                    "id": id,
-                                    "result": {
-                                        "contents": [
-                                            {
-                                                "uri": r.uri(),
-                                                "mimeType": r.mime_type(),
-                                                "text": serde_json::to_string(&data).unwrap_or_default()
-                                            }
-                                        ]
+                    Some(r) => match r.read(&self.context) {
+                        Ok(data) => Some(json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "contents": [
+                                    {
+                                        "uri": r.uri(),
+                                        "mimeType": r.mime_type(),
+                                        "text": serde_json::to_string(&data).unwrap_or_default()
                                     }
-                                }))
+                                ]
                             }
-                            Err(failure) => {
-                                Some(json!({
-                                    "jsonrpc": "2.0",
-                                    "id": id,
-                                    "error": {
-                                        "code": -32603,
-                                        "message": failure.summary
-                                    }
-                                }))
-                            }
-                        }
-                    }
-                    None => {
-                        Some(json!({
+                        })),
+                        Err(failure) => Some(json!({
                             "jsonrpc": "2.0",
                             "id": id,
                             "error": {
-                                "code": -32602,
-                                "message": format!("Resource not found: {}", uri)
+                                "code": -32603,
+                                "message": failure.summary
                             }
-                        }))
-                    }
+                        })),
+                    },
+                    None => Some(json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {
+                            "code": -32602,
+                            "message": format!("Resource not found: {}", uri)
+                        }
+                    })),
                 }
             }
             "prompts/list" => {
-                let prompts_json: Vec<Value> =
-                    self.prompts.iter().map(|p| prompt_to_json(p.as_ref())).collect();
+                let prompts_json: Vec<Value> = self
+                    .prompts
+                    .iter()
+                    .map(|p| prompt_to_json(p.as_ref()))
+                    .collect();
                 Some(json!({
                     "jsonrpc": "2.0",
                     "id": id,
@@ -455,64 +464,55 @@ impl McpServer {
             "prompts/get" => {
                 let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
-                let args_map: HashMap<String, Value> = serde_json::from_value(args).unwrap_or_default();
+                let args_map: HashMap<String, Value> =
+                    serde_json::from_value(args).unwrap_or_default();
 
                 let prompt = self.prompts.iter().find(|p| p.name() == name);
 
                 match prompt {
-                    Some(p) => {
-                        match p.get(args_map, &self.context) {
-                            Ok(data) => {
-                                Some(json!({
-                                    "jsonrpc": "2.0",
-                                    "id": id,
-                                    "result": {
-                                        "messages": [
-                                            {
-                                                "role": "user",
-                                                "content": {
-                                                    "type": "text",
-                                                    "text": serde_json::to_string(&data).unwrap_or_default()
-                                                }
-                                            }
-                                        ]
+                    Some(p) => match p.get(args_map, &self.context) {
+                        Ok(data) => Some(json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {
+                                "messages": [
+                                    {
+                                        "role": "user",
+                                        "content": {
+                                            "type": "text",
+                                            "text": serde_json::to_string(&data).unwrap_or_default()
+                                        }
                                     }
-                                }))
+                                ]
                             }
-                            Err(failure) => {
-                                Some(json!({
-                                    "jsonrpc": "2.0",
-                                    "id": id,
-                                    "error": {
-                                        "code": -32603,
-                                        "message": failure.summary
-                                    }
-                                }))
-                            }
-                        }
-                    }
-                    None => {
-                        Some(json!({
+                        })),
+                        Err(failure) => Some(json!({
                             "jsonrpc": "2.0",
                             "id": id,
                             "error": {
-                                "code": -32602,
-                                "message": format!("Prompt not found: {}", name)
+                                "code": -32603,
+                                "message": failure.summary
                             }
-                        }))
-                    }
+                        })),
+                    },
+                    None => Some(json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {
+                            "code": -32602,
+                            "message": format!("Prompt not found: {}", name)
+                        }
+                    })),
                 }
             }
-            _ => {
-                Some(json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "error": {
-                        "code": -32601,
-                        "message": format!("Method not found: {}", method)
-                    }
-                }))
-            }
+            _ => Some(json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": -32601,
+                    "message": format!("Method not found: {}", method)
+                }
+            })),
         }
     }
 }

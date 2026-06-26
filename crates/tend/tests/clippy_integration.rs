@@ -107,29 +107,49 @@ fn cargo_check_and_clippy_discovered_and_run() {
     };
 
     let plan = planner::build_plan(&nodes, &req).unwrap();
-    assert!(plan.items.iter().any(|i| i.task_id == "cargo-check"),
-        "cargo-check should be in the plan");
-    assert!(plan.items.iter().any(|i| i.task_id == "cargo-clippy"),
-        "cargo-clippy should be in the plan");
+    assert!(
+        plan.items.iter().any(|i| i.task_id == "cargo-check"),
+        "cargo-check should be in the plan"
+    );
+    assert!(
+        plan.items.iter().any(|i| i.task_id == "cargo-clippy"),
+        "cargo-clippy should be in the plan"
+    );
 
     let results = execute::execute_plan(&plan.items, root);
 
-    let check = results.iter().find(|r| r.task_id == "cargo-check")
+    let check = results
+        .iter()
+        .find(|r| r.task_id == "cargo-check")
         .expect("cargo-check result should exist");
-    assert!(check.outcome.is_pass(),
+    assert!(
+        check.outcome.is_pass(),
         "cargo check should pass: stderr={:?} stdout={:?}",
-        check.stderr, check.stdout);
+        check.stderr,
+        check.stdout
+    );
 
-    let clippy = results.iter().find(|r| r.task_id == "cargo-clippy")
+    let clippy = results
+        .iter()
+        .find(|r| r.task_id == "cargo-clippy")
         .expect("cargo-clippy result should exist");
-    assert!(clippy.outcome.is_pass(),
+    assert!(
+        clippy.outcome.is_pass(),
         "cargo clippy should pass on clean code: stderr={:?} stdout={:?}",
-        clippy.stderr, clippy.stdout);
+        clippy.stderr,
+        clippy.stdout
+    );
 
-    assert!(!clippy.stdout.contains("warning:"),
-        "clippy stdout should not contain warnings: {:?}", clippy.stdout);
-    assert!(!clippy.stderr.contains("warning:"),
-        "clippy stderr should not contain warnings: {:?}", clippy.stderr);
+    assert!(
+        !clippy.stdout.contains("warning:"),
+        "clippy stdout should not contain warnings: {:?}",
+        clippy.stdout
+    );
+    assert!(
+        !clippy.stderr.contains("warning:"),
+        "clippy stderr should not contain warnings: {:?}",
+        clippy.stderr
+    );
 }
 
 #[test]
@@ -164,9 +184,14 @@ fn cargo_clippy_fails_on_warnings() {
 
     let results = run_tend_config(root);
 
-    let clippy = results.iter().find(|r| r.task_id == "cargo-clippy")
+    let clippy = results
+        .iter()
+        .find(|r| r.task_id == "cargo-clippy")
         .expect("cargo-clippy result should exist");
-    assert!(clippy.outcome.is_failure(),
+    assert!(
+        clippy.outcome.is_failure(),
         "cargo clippy should fail on warning code: stderr={:?} stdout={:?}",
-        clippy.stderr, clippy.stdout);
+        clippy.stderr,
+        clippy.stdout
+    );
 }

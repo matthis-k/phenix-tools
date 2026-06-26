@@ -74,9 +74,7 @@ pub fn discover_configs(
     root: &Path,
     explicit: Option<&[PathBuf]>,
 ) -> Result<Vec<DiscoveredNode>, DiscoverError> {
-    let root = root
-        .canonicalize()
-        .map_err(|e| DiscoverError::Io(e))?;
+    let root = root.canonicalize().map_err(DiscoverError::Io)?;
     let mut config_files = Vec::new();
 
     if let Some(paths) = explicit {
@@ -89,26 +87,21 @@ pub fn discover_configs(
             if !canonical.exists() {
                 return Err(DiscoverError::ConfigNotFound);
             }
-            let canonical = canonical
-                .canonicalize()
-                .map_err(|e| DiscoverError::Io(e))?;
+            let canonical = canonical.canonicalize().map_err(DiscoverError::Io)?;
             config_files.push(canonical);
         }
     } else {
-        for entry in WalkDir::new(&root)
-            .into_iter()
-            .filter_entry(|e| {
-                if e.depth() == 0 {
-                    return true;
-                }
-                let name = e.file_name().to_str().unwrap_or("");
-                if e.file_type().is_dir() {
-                    !is_ignored_dir(name)
-                } else {
-                    true
-                }
-            })
-        {
+        for entry in WalkDir::new(&root).into_iter().filter_entry(|e| {
+            if e.depth() == 0 {
+                return true;
+            }
+            let name = e.file_name().to_str().unwrap_or("");
+            if e.file_type().is_dir() {
+                !is_ignored_dir(name)
+            } else {
+                true
+            }
+        }) {
             let entry = entry.map_err(|e| DiscoverError::Io(e.into()))?;
             if entry.file_type().is_file() && entry.file_name() == ".tend.json" {
                 config_files.push(entry.path().to_path_buf());
@@ -126,13 +119,10 @@ pub fn discover_configs(
     let mut seen_paths = HashSet::new();
 
     for path in &config_files {
-        let content =
-            std::fs::read_to_string(path).map_err(|e| DiscoverError::Io(e))?;
+        let content = std::fs::read_to_string(path).map_err(DiscoverError::Io)?;
 
-        let parsed: TendConfig =
-            serde_json::from_str(&content).map_err(|e| {
-                DiscoverError::Serde(format!("{}: {}", path.display(), e))
-            })?;
+        let parsed: TendConfig = serde_json::from_str(&content)
+            .map_err(|e| DiscoverError::Serde(format!("{}: {}", path.display(), e)))?;
 
         if parsed.version != 1 {
             return Err(DiscoverError::Config(ConfigError::InvalidVersion(
@@ -143,7 +133,13 @@ pub fn discover_configs(
         let node_dir = path.parent().unwrap_or(&root);
         let rel = node_dir
             .strip_prefix(&root)
-            .map(|p| if p.as_os_str().is_empty() { Path::new(".") } else { p })
+            .map(|p| {
+                if p.as_os_str().is_empty() {
+                    Path::new(".")
+                } else {
+                    p
+                }
+            })
             .unwrap_or_else(|_| Path::new("."));
 
         if !seen_paths.insert(rel.to_path_buf()) {

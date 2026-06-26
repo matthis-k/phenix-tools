@@ -20,7 +20,10 @@ impl MutationLevel {
     }
 
     pub fn requires_confirmation(&self) -> bool {
-        matches!(self, MutationLevel::CreatesCommit | MutationLevel::Network | MutationLevel::Destructive)
+        matches!(
+            self,
+            MutationLevel::CreatesCommit | MutationLevel::Network | MutationLevel::Destructive
+        )
     }
 }
 
@@ -33,11 +36,17 @@ pub struct Warning {
 
 impl Warning {
     pub fn new(message: impl Into<String>) -> Self {
-        Self { message: message.into(), code: None }
+        Self {
+            message: message.into(),
+            code: None,
+        }
     }
 
     pub fn with_code(message: impl Into<String>, code: impl Into<String>) -> Self {
-        Self { message: message.into(), code: Some(code.into()) }
+        Self {
+            message: message.into(),
+            code: Some(code.into()),
+        }
     }
 }
 
@@ -50,11 +59,17 @@ pub struct SuggestedAction {
 
 impl SuggestedAction {
     pub fn new(action: impl Into<String>) -> Self {
-        Self { action: action.into(), reason: None }
+        Self {
+            action: action.into(),
+            reason: None,
+        }
     }
 
     pub fn with_reason(action: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self { action: action.into(), reason: Some(reason.into()) }
+        Self {
+            action: action.into(),
+            reason: Some(reason.into()),
+        }
     }
 }
 
@@ -82,11 +97,17 @@ pub struct Risk {
 
 impl Risk {
     pub fn new(description: impl Into<String>) -> Self {
-        Self { description: description.into(), severity: None }
+        Self {
+            description: description.into(),
+            severity: None,
+        }
     }
 
     pub fn with_severity(description: impl Into<String>, severity: impl Into<String>) -> Self {
-        Self { description: description.into(), severity: Some(severity.into()) }
+        Self {
+            description: description.into(),
+            severity: Some(severity.into()),
+        }
     }
 }
 

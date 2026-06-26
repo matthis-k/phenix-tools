@@ -70,10 +70,7 @@ pub struct Plan {
     pub items: Vec<PlanItem>,
 }
 
-pub fn build_plan(
-    nodes: &[ResolvedNode],
-    req: &PlanRequest,
-) -> Result<Plan, PlanError> {
+pub fn build_plan(nodes: &[ResolvedNode], req: &PlanRequest) -> Result<Plan, PlanError> {
     let phase = req.phase;
     let mode = req.mode;
     let changed_files: Option<Vec<String>> = if !req.files.is_empty() {
@@ -116,7 +113,7 @@ pub fn build_plan(
                 chain_id: node.id.clone(),
                 description,
                 phase,
-                step: step,
+                step,
                 item_type: PlanItemType::TaskBefore,
                 context: node.context.clone(),
                 reason: PlanReason::BeforeAfter,
@@ -159,7 +156,10 @@ pub fn build_plan(
             // Compute matched files for this task
             let matched = compute_matched_files(task, changed_ref);
 
-            let has_when_condition = task.config.when.as_ref()
+            let has_when_condition = task
+                .config
+                .when
+                .as_ref()
                 .and_then(|w| w.changed.as_ref())
                 .map(|c| !c.paths.is_empty())
                 .unwrap_or(false);
@@ -185,7 +185,7 @@ pub fn build_plan(
                     chain_id: task_chain_id.clone(),
                     description: step.description.clone(),
                     phase,
-                    step: step,
+                    step,
                     item_type: PlanItemType::TaskBefore,
                     context: node.context.clone(),
                     reason: PlanReason::BeforeAfter,
@@ -199,20 +199,12 @@ pub fn build_plan(
                 config_path: node.config_path.clone(),
                 task_id: task.config.id.clone(),
                 chain_id: task_chain_id.clone(),
-                description: task
-                    .config
-                    .description
-                    .clone()
-                    .unwrap_or_default(),
+                description: task.config.description.clone().unwrap_or_default(),
                 phase,
                 step: Step {
                     kind: task_step_kind,
                     always: task.config.always.unwrap_or(false),
-                    description: task
-                        .config
-                        .description
-                        .clone()
-                        .unwrap_or_default(),
+                    description: task.config.description.clone().unwrap_or_default(),
                 },
                 item_type: PlanItemType::TaskAction,
                 context: node.context.clone(),
@@ -229,7 +221,7 @@ pub fn build_plan(
                     chain_id: task_chain_id.clone(),
                     description: step.description.clone(),
                     phase,
-                    step: step,
+                    step,
                     item_type: PlanItemType::TaskAfter,
                     context: node.context.clone(),
                     reason: PlanReason::BeforeAfter,
@@ -257,7 +249,7 @@ pub fn build_plan(
                 chain_id: node.id.clone(),
                 description,
                 phase,
-                step: step,
+                step,
                 item_type: PlanItemType::TaskAfter,
                 context: node.context.clone(),
                 reason: PlanReason::BeforeAfter,
@@ -355,7 +347,9 @@ fn should_run_step(step: &Step) -> bool {
     match &step.kind {
         TaskKind::Command { command, .. } => !command.is_empty(),
         TaskKind::FilesExist { paths } | TaskKind::FilesAbsent { paths } => !paths.is_empty(),
-        TaskKind::ForbidText { paths, .. } | TaskKind::RequireText { paths, .. } => !paths.is_empty(),
+        TaskKind::ForbidText { paths, .. } | TaskKind::RequireText { paths, .. } => {
+            !paths.is_empty()
+        }
     }
 }
 
@@ -366,10 +360,7 @@ fn task_step_kind_from_config(cfg: &TaskConfig) -> crate::model::TaskKind {
 pub fn task_matches_paths(patterns: &[String], changed_files: &[String]) -> bool {
     let mut builder = GlobSetBuilder::new();
     for p in patterns {
-        let glob = match GlobBuilder::new(p)
-            .literal_separator(true)
-            .build()
-        {
+        let glob = match GlobBuilder::new(p).literal_separator(true).build() {
             Ok(g) => g,
             Err(_) => continue,
         };
@@ -418,13 +409,21 @@ mod tests {
         }
     }
 
-    fn make_command_task(id: &str, phase: Phase, mutates: bool, command: Vec<String>) -> ResolvedTask {
+    fn make_command_task(
+        id: &str,
+        phase: Phase,
+        mutates: bool,
+        command: Vec<String>,
+    ) -> ResolvedTask {
         ResolvedTask {
             config: TaskConfig {
                 id: id.to_string(),
                 description: None,
                 phase,
-                kind: TaskKind::Command { command, expect: None },
+                kind: TaskKind::Command {
+                    command,
+                    expect: None,
+                },
                 tags: None,
                 mutates: Some(mutates),
                 when: None,

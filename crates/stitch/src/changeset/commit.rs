@@ -11,7 +11,10 @@ pub fn execute() -> Result<(), String> {
     };
 
     if cs.state != ChangesetState::Validated && cs.state != ChangesetState::CommittedPartial {
-        return Err(format!("Changeset state '{}' does not support commit.", cs.state));
+        return Err(format!(
+            "Changeset state '{}' does not support commit.",
+            cs.state
+        ));
     }
 
     // Revalidate before committing
@@ -68,7 +71,11 @@ pub fn execute() -> Result<(), String> {
                 let hash = git::git_short_head(&repo_path).ok();
                 rp.commit_hash = hash;
                 rp.state = RepoState::Committed;
-                println!("  committed {}: {}", rp.name, rp.commit_hash.as_deref().unwrap_or("?"));
+                println!(
+                    "  committed {}: {}",
+                    rp.name,
+                    rp.commit_hash.as_deref().unwrap_or("?")
+                );
             }
             Err(e) => {
                 rp.state = RepoState::Failed;
@@ -89,7 +96,10 @@ pub fn execute() -> Result<(), String> {
     if all_ok {
         println!("Changeset '{}' fully committed.", cs.id);
     } else {
-        eprintln!("Changeset '{}' partially committed. Some repos failed.", cs.id);
+        eprintln!(
+            "Changeset '{}' partially committed. Some repos failed.",
+            cs.id
+        );
         return Err("Partial commit".to_string());
     }
 

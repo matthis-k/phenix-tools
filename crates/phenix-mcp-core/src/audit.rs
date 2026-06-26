@@ -32,7 +32,10 @@ impl AuditSink {
         if let Some(ref dir) = log_dir {
             let _ = fs::create_dir_all(dir);
         }
-        Self { entries: Mutex::new(Vec::new()), log_dir }
+        Self {
+            entries: Mutex::new(Vec::new()),
+            log_dir,
+        }
     }
 
     pub fn record(&self, entry: AuditEntry) {
@@ -57,7 +60,7 @@ impl AuditSink {
         tool: &str,
         input: serde_json::Value,
         mutation_level: &str,
-    ) -> AuditEntryBuilder {
+    ) -> AuditEntryBuilder<'_> {
         AuditEntryBuilder {
             audit_id,
             timestamp: Utc::now().to_rfc3339(),

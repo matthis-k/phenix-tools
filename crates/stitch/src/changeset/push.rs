@@ -8,7 +8,10 @@ pub fn execute() -> Result<(), String> {
     };
 
     if cs.state != ChangesetState::Committed {
-        return Err(format!("Changeset state is '{}', not 'committed'. Run `stitch changeset commit` first.", cs.state));
+        return Err(format!(
+            "Changeset state is '{}', not 'committed'. Run `stitch changeset commit` first.",
+            cs.state
+        ));
     }
 
     Err("Push is not implemented yet".to_string())

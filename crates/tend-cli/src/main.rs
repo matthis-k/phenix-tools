@@ -1,3 +1,5 @@
+#![allow(clippy::ptr_arg, clippy::too_many_arguments)]
+
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -11,7 +13,11 @@ use tend::planner;
 use tend::report;
 
 #[derive(Parser)]
-#[command(name = "tend", version, about = "Low-level composable task/verification/hook harness for Phenix")]
+#[command(
+    name = "tend",
+    version,
+    about = "Low-level composable task/verification/hook harness for Phenix"
+)]
 struct Cli {
     #[arg(global = true, long, help = "Set discovery root directory")]
     root: Option<PathBuf>,
@@ -105,17 +111,30 @@ fn main() {
         Commands::Tree => cmd_tree(&root, configs.as_deref()),
         Commands::List => cmd_list(&root, configs.as_deref()),
         Commands::Status { json } => cmd_status(&root, configs.as_deref(), json),
-        Commands::Plan { mode, phase, group, target, base: _, json, files } => {
-            cmd_plan(&root, configs.as_deref(), &mode, &phase, group.as_deref(), target.as_deref(), &files, json)
-        },
-        Commands::Run { phase, mode } => {
-            match Phase::from_str(&phase) {
-                Ok(p) => match RunMode::from_str(&mode) {
-                    Ok(m) => cmd_run(&root, configs.as_deref(), p, m),
-                    Err(e) => Err(e),
-                },
+        Commands::Plan {
+            mode,
+            phase,
+            group,
+            target,
+            base: _,
+            json,
+            files,
+        } => cmd_plan(
+            &root,
+            configs.as_deref(),
+            &mode,
+            &phase,
+            group.as_deref(),
+            target.as_deref(),
+            &files,
+            json,
+        ),
+        Commands::Run { phase, mode } => match Phase::from_str(&phase) {
+            Ok(p) => match RunMode::from_str(&mode) {
+                Ok(m) => cmd_run(&root, configs.as_deref(), p, m),
                 Err(e) => Err(e),
-            }
+            },
+            Err(e) => Err(e),
         },
         Commands::Verify { mode } => cmd_verify(&root, configs.as_deref(), &mode),
         Commands::Fix { mode } => cmd_fix(&root, configs.as_deref(), &mode),
@@ -169,8 +188,8 @@ fn get_changed_files(root: &std::path::Path) -> Result<Vec<String>, String> {
 }
 
 fn cmd_tree(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> {
-    let discovered = discover::discover_configs(root, configs)
-        .map_err(|e| format!("discovery failed: {e}"))?;
+    let discovered =
+        discover::discover_configs(root, configs).map_err(|e| format!("discovery failed: {e}"))?;
     let nodes = discover::resolve_nodes(root, discovered);
 
     println!("Task tree (root: {})", root.display());
@@ -190,12 +209,11 @@ fn cmd_tree(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> 
         }
         println!("    tasks: {}", node.tasks.len());
         for task in &node.tasks {
-            let desc = task
-                .config
-                .description
-                .as_deref()
-                .unwrap_or("");
-            println!("      {}  [{}]  {}", task.config.id, task.config.phase, desc);
+            let desc = task.config.description.as_deref().unwrap_or("");
+            println!(
+                "      {}  [{}]  {}",
+                task.config.id, task.config.phase, desc
+            );
         }
         println!();
     }
@@ -204,8 +222,8 @@ fn cmd_tree(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> 
 }
 
 fn cmd_list(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> {
-    let discovered = discover::discover_configs(root, configs)
-        .map_err(|e| format!("discovery failed: {e}"))?;
+    let discovered =
+        discover::discover_configs(root, configs).map_err(|e| format!("discovery failed: {e}"))?;
     let nodes = discover::resolve_nodes(root, discovered);
 
     for node in &nodes {
@@ -215,11 +233,7 @@ fn cmd_list(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> 
             } else {
                 node.node_path.to_string_lossy().to_string()
             };
-            let desc = task
-                .config
-                .description
-                .as_deref()
-                .unwrap_or("");
+            let desc = task.config.description.as_deref().unwrap_or("");
             let mutates = task
                 .config
                 .mutates
@@ -244,8 +258,8 @@ fn cmd_run(
     phase: Phase,
     mode: RunMode,
 ) -> Result<i32, String> {
-    let discovered = discover::discover_configs(root, configs)
-        .map_err(|e| format!("discovery failed: {e}"))?;
+    let discovered =
+        discover::discover_configs(root, configs).map_err(|e| format!("discovery failed: {e}"))?;
     let nodes = discover::resolve_nodes(root, discovered);
 
     let files = if mode == RunMode::Changed {
@@ -254,7 +268,13 @@ fn cmd_run(
         Vec::new()
     };
 
-    let req = PlanRequest { phase, mode, group: None, target: None, files };
+    let req = PlanRequest {
+        phase,
+        mode,
+        group: None,
+        target: None,
+        files,
+    };
 
     let plan = planner::build_plan(&nodes, &req).map_err(|e| match e {
         planner::PlanError::MutatingRefused(id) => {
@@ -290,11 +310,7 @@ fn cmd_verify(
     cmd_run(root, configs, Phase::Verify, run_mode)
 }
 
-fn cmd_fix(
-    root: &PathBuf,
-    configs: Option<&[PathBuf]>,
-    mode: &FixMode,
-) -> Result<i32, String> {
+fn cmd_fix(root: &PathBuf, configs: Option<&[PathBuf]>, mode: &FixMode) -> Result<i32, String> {
     let run_mode = match mode {
         FixMode::Changed => RunMode::Changed,
         FixMode::All => RunMode::Full,
@@ -319,23 +335,30 @@ fn cmd_gate(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> 
 }
 
 fn cmd_status(root: &PathBuf, configs: Option<&[PathBuf]>, json: bool) -> Result<i32, String> {
-    let discovered = discover::discover_configs(root, configs)
-        .map_err(|e| format!("discovery failed: {e}"))?;
+    let discovered =
+        discover::discover_configs(root, configs).map_err(|e| format!("discovery failed: {e}"))?;
     let nodes = discover::resolve_nodes(root, discovered);
 
     if json {
-        let entries: Vec<serde_json::Value> = nodes.iter().map(|n| {
-            serde_json::json!({
-                "node_path": n.node_path.to_string_lossy(),
-                "id": n.id,
-                "description": n.description,
-                "tags": n.tags,
-                "tasks": n.tasks.len()
+        let entries: Vec<serde_json::Value> = nodes
+            .iter()
+            .map(|n| {
+                serde_json::json!({
+                    "node_path": n.node_path.to_string_lossy(),
+                    "id": n.id,
+                    "description": n.description,
+                    "tags": n.tags,
+                    "tasks": n.tasks.len()
+                })
             })
-        }).collect();
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "configs": entries, "total": entries.len()
-        })).unwrap());
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "configs": entries, "total": entries.len()
+            }))
+            .unwrap()
+        );
     } else {
         println!("Tend workspace status (root: {})", root.display());
         for node in &nodes {
@@ -346,9 +369,11 @@ fn cmd_status(root: &PathBuf, configs: Option<&[PathBuf]>, json: bool) -> Result
             }
             println!();
         }
-        println!("Total: {} configs, {} tasks",
+        println!(
+            "Total: {} configs, {} tasks",
             nodes.len(),
-            nodes.iter().map(|n| n.tasks.len()).sum::<usize>());
+            nodes.iter().map(|n| n.tasks.len()).sum::<usize>()
+        );
     }
     Ok(0)
 }
@@ -366,8 +391,8 @@ fn cmd_plan(
     let run_mode = RunMode::from_str(mode).unwrap_or(RunMode::Changed);
     let phase = Phase::from_str(phase).unwrap_or(Phase::Verify);
 
-    let discovered = discover::discover_configs(root, configs)
-        .map_err(|e| format!("discovery failed: {e}"))?;
+    let discovered =
+        discover::discover_configs(root, configs).map_err(|e| format!("discovery failed: {e}"))?;
     let nodes = discover::resolve_nodes(root, discovered);
 
     let plan_files = match run_mode {
@@ -389,33 +414,48 @@ fn cmd_plan(
         files: plan_files,
     };
 
-    let plan = planner::build_plan(&nodes, &req)
-        .map_err(|e| format!("{e}"))?;
+    let plan = planner::build_plan(&nodes, &req).map_err(|e| format!("{e}"))?;
 
     if json {
-        let checks: Vec<serde_json::Value> = plan.items.iter().map(|item| {
-            serde_json::json!({
-                "id": item.task_id,
-                "group": item.chain_id.split('.').next().unwrap_or(&item.task_id),
-                "kind": item.step.kind.description(),
-                "phase": item.phase,
-                "reason": item.reason.to_string(),
-                "files": item.matched_files,
-                "depends_on": []
+        let checks: Vec<serde_json::Value> = plan
+            .items
+            .iter()
+            .map(|item| {
+                serde_json::json!({
+                    "id": item.task_id,
+                    "group": item.chain_id.split('.').next().unwrap_or(&item.task_id),
+                    "kind": item.step.kind.description(),
+                    "phase": item.phase,
+                    "reason": item.reason.to_string(),
+                    "files": item.matched_files,
+                    "depends_on": []
+                })
             })
-        }).collect();
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "checks": checks,
-            "total": checks.len()
-        })).unwrap());
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "checks": checks,
+                "total": checks.len()
+            }))
+            .unwrap()
+        );
     } else {
-        println!("Checks that would run (mode: {}, phase: {}):", run_mode, phase);
+        println!(
+            "Checks that would run (mode: {}, phase: {}):",
+            run_mode, phase
+        );
         println!();
         if plan.items.is_empty() {
             println!("  (no checks match)");
         } else {
             for (i, item) in plan.items.iter().enumerate() {
-                println!("{}. {} [{}]", i + 1, item.task_id, item.step.kind.description());
+                println!(
+                    "{}. {} [{}]",
+                    i + 1,
+                    item.task_id,
+                    item.step.kind.description()
+                );
                 if !item.description.is_empty() {
                     println!("   description: {}", item.description);
                 }

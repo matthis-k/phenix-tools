@@ -83,7 +83,11 @@ impl WorkspaceGraph {
         self.detect_cycles().map_err(|cycle| {
             format!(
                 "Cycle detected: {}",
-                cycle.iter().map(|n| n.as_str()).collect::<Vec<_>>().join(" -> ")
+                cycle
+                    .iter()
+                    .map(|n| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" -> ")
             )
         })?;
 
@@ -205,7 +209,7 @@ pub fn discover_graph(cfg: &WorkspaceConfig) -> Result<WorkspaceGraph, String> {
                 })
                 .collect()
         } else {
-            scan_flake_inputs(&repo_path, &cfg)?
+            scan_flake_inputs(&repo_path, cfg)?
         };
 
         for (dep_name, input_name) in &deps {
@@ -263,7 +267,9 @@ fn scan_flake_inputs(
             format!("{}.url", repo.name),
         ];
 
-        let matched = check_patterns.iter().any(|pat| content.contains(pat.as_str()));
+        let matched = check_patterns
+            .iter()
+            .any(|pat| content.contains(pat.as_str()));
 
         if matched {
             deps.push((repo.name.clone(), repo.name.clone()));
@@ -274,10 +280,9 @@ fn scan_flake_inputs(
 }
 
 fn load_sync_json(path: &Path) -> Result<SyncJson, String> {
-    let content =
-        std::fs::read_to_string(path).map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse {}: {}", path.display(), e))
 }
 
 #[cfg(test)]
@@ -309,16 +314,16 @@ mod tests {
             .map(|(from, to)| DependencyEdge::new(from, to, to))
             .collect();
         let root = all_names.iter().next().cloned().unwrap_or_default();
-        WorkspaceGraph {
-            root,
-            nodes,
-            edges,
-        }
+        WorkspaceGraph { root, nodes, edges }
     }
 
     #[test]
     fn test_topo_order_simple() {
-        let graph = make_graph(vec![("root", "shell"), ("root", "tools"), ("shell", "tools")]);
+        let graph = make_graph(vec![
+            ("root", "shell"),
+            ("root", "tools"),
+            ("shell", "tools"),
+        ]);
         let order = graph.topological_order().unwrap();
         assert_eq!(order, vec!["tools", "shell", "root"]);
     }
@@ -373,7 +378,11 @@ mod tests {
 
     #[test]
     fn test_push_order_equals_topo_order() {
-        let graph = make_graph(vec![("root", "shell"), ("root", "tools"), ("shell", "tools")]);
+        let graph = make_graph(vec![
+            ("root", "shell"),
+            ("root", "tools"),
+            ("shell", "tools"),
+        ]);
         let order = graph.topological_order().unwrap();
         assert_eq!(order, vec!["tools", "shell", "root"]);
     }

@@ -27,8 +27,10 @@ pub fn execute_plan(items: &[PlanItem], _root: &Path) -> Vec<ExecutionResult> {
                 task_id: item.task_id.clone(),
                 description: item.description.clone(),
                 kind: item.step.kind.description().to_string(),
-                phase: item.phase.clone(),
-                outcome: CheckOutcome::Skipped { reason: "skipped due to earlier failure in chain".to_string() },
+                phase: item.phase,
+                outcome: CheckOutcome::Skipped {
+                    reason: "skipped due to earlier failure in chain".to_string(),
+                },
                 stdout: String::new(),
                 stderr: String::new(),
             });
@@ -42,12 +44,8 @@ pub fn execute_plan(items: &[PlanItem], _root: &Path) -> Vec<ExecutionResult> {
             TaskKind::Command { command, expect } => {
                 checks::command::run_command(command, expect.as_ref(), &workdir, env)
             }
-            TaskKind::FilesExist { paths } => {
-                checks::files::run_exist(paths, &workdir)
-            }
-            TaskKind::FilesAbsent { paths } => {
-                checks::files::run_absent(paths, &workdir)
-            }
+            TaskKind::FilesExist { paths } => checks::files::run_exist(paths, &workdir),
+            TaskKind::FilesAbsent { paths } => checks::files::run_absent(paths, &workdir),
             TaskKind::ForbidText { paths, patterns } => {
                 checks::text::run_forbid(paths, patterns, &workdir)
             }

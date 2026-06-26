@@ -16,7 +16,7 @@ struct ChecksFile {
 
 #[derive(Debug, Deserialize)]
 struct ScopeConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[allow(dead_code)]
     root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     workdir: Option<String>,
@@ -56,8 +56,10 @@ struct Check {
     id: String,
     description: String,
     group: Option<String>,
+    #[allow(dead_code)]
     tags: Option<Vec<String>>,
     when: Option<WhenConfig>,
+    #[allow(dead_code)]
     workdir_setting: Option<String>,
     command: Vec<String>,
     expect: ExpectConfig,
@@ -100,10 +102,7 @@ pub fn dispatch(
         GateCommands::List => {
             for check in &checks {
                 let group = check.group.as_deref().unwrap_or("(no group)");
-                println!(
-                    "  {}  [{}]  {}",
-                    check.id, group, check.description
-                );
+                println!("  {}  [{}]  {}", check.id, group, check.description);
             }
             println!("\nTotal: {} checks", checks.len());
             Ok(())
@@ -187,12 +186,8 @@ fn discover_checks(
                 ));
             }
 
-            let setting = check_cfg
-                .workdir
-                .as_deref()
-                .unwrap_or(file_scope_workdir);
-            let resolved_workdir =
-                resolve_workdir(setting, config_dir, workspace_root)?;
+            let setting = check_cfg.workdir.as_deref().unwrap_or(file_scope_workdir);
+            let resolved_workdir = resolve_workdir(setting, config_dir, workspace_root)?;
 
             checks.push(Check {
                 id: check_cfg.id.clone(),
@@ -221,11 +216,8 @@ fn resolve_workdir(
 ) -> Result<PathBuf, String> {
     match setting {
         "config" => Ok(config_dir.to_path_buf()),
-        "repo" => Ok(
-            find_git_root(config_dir).unwrap_or_else(|| workspace_root.to_path_buf()),
-        ),
-        "cwd" => Ok(std::env::current_dir()
-            .map_err(|e| format!("Cannot get cwd: {}", e))?),
+        "repo" => Ok(find_git_root(config_dir).unwrap_or_else(|| workspace_root.to_path_buf())),
+        "cwd" => Ok(std::env::current_dir().map_err(|e| format!("Cannot get cwd: {}", e))?),
         _ => {
             let candidate = config_dir.join(setting);
             if candidate.exists() {

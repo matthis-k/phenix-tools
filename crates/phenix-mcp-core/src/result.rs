@@ -73,11 +73,7 @@ pub struct ToolFailure {
 }
 
 impl ToolFailure {
-    pub fn new(
-        kind: ErrorKind,
-        message: impl Into<String>,
-        audit_id: impl Into<String>,
-    ) -> Self {
+    pub fn new(kind: ErrorKind, message: impl Into<String>, audit_id: impl Into<String>) -> Self {
         let msg: String = message.into();
         Self {
             ok: false,

@@ -150,11 +150,7 @@ mod tests {
         let dir = test_dir();
         fs::write(dir.path().join("test.md"), b"contains id=\"secret\" here").unwrap();
 
-        let result = run_forbid(
-            &["*.md".to_string()],
-            &["id=\"".to_string()],
-            dir.path(),
-        );
+        let result = run_forbid(&["*.md".to_string()], &["id=\"".to_string()], dir.path());
         assert!(result.outcome.is_failure());
         match &result.outcome {
             crate::checks::CheckOutcome::Failed { reason } => {
@@ -169,11 +165,7 @@ mod tests {
         let dir = test_dir();
         fs::write(dir.path().join("test.md"), b"clean file no issues").unwrap();
 
-        let result = run_forbid(
-            &["*.md".to_string()],
-            &["id=\"".to_string()],
-            dir.path(),
-        );
+        let result = run_forbid(&["*.md".to_string()], &["id=\"".to_string()], dir.path());
         assert!(result.outcome.is_pass());
     }
 

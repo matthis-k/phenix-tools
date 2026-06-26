@@ -1,35 +1,84 @@
+#![allow(clippy::too_many_arguments)]
+
 use std::collections::BTreeMap;
 
 use clap::{Parser, Subcommand};
 
-use tend::model::{Phase, PlanRequest, RunMode};
 use stitch::config;
 use stitch::git;
 use stitch::graph;
 use stitch::model;
 use stitch::status;
 use stitch::sync;
+use tend::model::{Phase, PlanRequest, RunMode};
 
 fn main() {
     let cli = Cli::parse();
 
     let result = match &cli.command {
         Commands::Repos => cmd_repos(),
-        Commands::Status { json, short, dirty_only, repo } => cmd_status(*json, *short, *dirty_only, repo.as_deref()),
+        Commands::Status {
+            json,
+            short,
+            dirty_only,
+            repo,
+        } => cmd_status(*json, *short, *dirty_only, repo.as_deref()),
         Commands::Diff { repo, staged, json } => cmd_diff(repo.as_deref(), *staged, *json),
         Commands::Dag { mode, split, json } => cmd_dag(mode.as_deref(), split.as_deref(), *json),
-        Commands::Commit { plan, dry_run, json: json_output, apply, no_push, force, resume, messages, message, repo, write_template, no_tend, staged } => {
+        Commands::Commit {
+            plan,
+            dry_run,
+            json: json_output,
+            apply,
+            no_push,
+            force,
+            resume,
+            messages,
+            message,
+            repo,
+            write_template,
+            no_tend,
+            staged,
+        } => {
             if *write_template {
-                cmd_commit(message.as_deref(), repo.as_deref(), messages.as_deref(), true, *dry_run, *no_tend, *staged, *apply)
+                cmd_commit(
+                    message.as_deref(),
+                    repo.as_deref(),
+                    messages.as_deref(),
+                    true,
+                    *dry_run,
+                    *no_tend,
+                    *staged,
+                    *apply,
+                )
             } else if message.is_some() || repo.is_some() || *no_tend || *staged {
-                cmd_commit(message.as_deref(), repo.as_deref(), messages.as_deref(), false, *dry_run, *no_tend, *staged, *apply)
-            } else if resume.is_some() || *apply || *plan || *dry_run || *no_push || *force || messages.is_some() {
-                cmd_sync_commit(*plan, *dry_run, *json_output, *apply, *no_push, *force, resume.as_deref(), messages.as_deref())
+                cmd_commit(
+                    message.as_deref(),
+                    repo.as_deref(),
+                    messages.as_deref(),
+                    false,
+                    *dry_run,
+                    *no_tend,
+                    *staged,
+                    *apply,
+                )
             } else {
-                cmd_sync_commit(*plan, *dry_run, *json_output, *apply, *no_push, *force, resume.as_deref(), messages.as_deref())
+                cmd_sync_commit(
+                    *plan,
+                    *dry_run,
+                    *json_output,
+                    *apply,
+                    *no_push,
+                    *force,
+                    resume.as_deref(),
+                    messages.as_deref(),
+                )
             }
-        },
-        Commands::Push { dry_run, json: json_output } => cmd_push(*dry_run, *json_output),
+        }
+        Commands::Push {
+            dry_run,
+            json: json_output,
+        } => cmd_push(*dry_run, *json_output),
         Commands::Changeset { command } => cmd_changeset(command),
     };
 
@@ -59,7 +108,10 @@ fn cmd_changeset(command: &ChangesetCliCommand) -> Result<(), String> {
                             let action = rp.action.as_deref().unwrap_or("-");
                             let msg = rp.message.as_deref().unwrap_or("<missing>");
                             let hash = rp.commit_hash.as_deref().unwrap_or("-");
-                            println!("  {}  action={}  message={}  hash={}", rp.name, action, msg, hash);
+                            println!(
+                                "  {}  action={}  message={}  hash={}",
+                                rp.name, action, msg, hash
+                            );
                         }
                     }
                 }
@@ -69,9 +121,15 @@ fn cmd_changeset(command: &ChangesetCliCommand) -> Result<(), String> {
             }
             Ok(())
         }
-        ChangesetCliCommand::Plan { write, json } => stitch::changeset::plan::execute(*write, *json),
-        ChangesetCliCommand::SetMessage { repo, message } => stitch::changeset::set_message::execute(repo, message),
-        ChangesetCliCommand::SetFiles { repo, files } => stitch::changeset::set_files::execute(repo, files),
+        ChangesetCliCommand::Plan { write, json } => {
+            stitch::changeset::plan::execute(*write, *json)
+        }
+        ChangesetCliCommand::SetMessage { repo, message } => {
+            stitch::changeset::set_message::execute(repo, message)
+        }
+        ChangesetCliCommand::SetFiles { repo, files } => {
+            stitch::changeset::set_files::execute(repo, files)
+        }
         ChangesetCliCommand::Validate { json } => stitch::changeset::validate::execute(*json),
         ChangesetCliCommand::Commit => stitch::changeset::commit::execute(),
         ChangesetCliCommand::Push => stitch::changeset::push::execute(),
@@ -80,7 +138,11 @@ fn cmd_changeset(command: &ChangesetCliCommand) -> Result<(), String> {
 }
 
 #[derive(Parser)]
-#[command(name = "stitch", version, about = "Multi-repo Git coordinator for Phenix workspaces")]
+#[command(
+    name = "stitch",
+    version,
+    about = "Multi-repo Git coordinator for Phenix workspaces"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -114,7 +176,11 @@ enum Commands {
     Dag {
         #[arg(long, default_value = "commit", help = "DAG mode: commit, sync, full")]
         mode: Option<String>,
-        #[arg(long, default_value = "by-repo", help = "Split strategy: by-repo, by-path")]
+        #[arg(
+            long,
+            default_value = "by-repo",
+            help = "Split strategy: by-repo, by-path"
+        )]
         split: Option<String>,
         #[arg(long, help = "Output as JSON")]
         json: bool,
@@ -217,30 +283,39 @@ enum ChangesetCliCommand {
 fn cmd_repos() -> Result<(), String> {
     let cfg = config::find_and_load()?;
     for repo in &cfg.repos {
-        let exists = if repo.resolved_path(&cfg).exists() { "\u{2713}" } else { "\u{2717}" };
+        let exists = if repo.resolved_path(&cfg).exists() {
+            "\u{2713}"
+        } else {
+            "\u{2717}"
+        };
         println!("{}  {}  ({})", exists, repo.name, repo.path);
     }
     Ok(())
 }
 
-fn cmd_status(json: bool, short: bool, dirty_only: bool, repo_filter: Option<&str>) -> Result<(), String> {
+fn cmd_status(
+    json: bool,
+    short: bool,
+    dirty_only: bool,
+    repo_filter: Option<&str>,
+) -> Result<(), String> {
     let cfg = config::find_and_load()?;
     let statuses = status::collect_all(&cfg)?;
 
     if json {
-        let filtered: Vec<_> = statuses.iter()
-            .filter(|s| repo_filter.map_or(true, |r| s.name == r))
+        let filtered: Vec<_> = statuses
+            .iter()
+            .filter(|s| repo_filter.is_none_or(|r| s.name == r))
             .filter(|s| !dirty_only || s.is_dirty)
             .collect();
-        let output = serde_json::to_string_pretty(&filtered)
-            .map_err(|e| format!("JSON: {}", e))?;
+        let output = serde_json::to_string_pretty(&filtered).map_err(|e| format!("JSON: {}", e))?;
         println!("{}", output);
         return Ok(());
     }
 
     if short {
         for s in &statuses {
-            if repo_filter.map_or(true, |r| s.name == r) && (!dirty_only || s.is_dirty) {
+            if repo_filter.is_none_or(|r| s.name == r) && (!dirty_only || s.is_dirty) {
                 let prefix = if s.is_dirty { "M" } else { " " };
                 println!("{}  {}  {}", prefix, s.name, s.branch);
             }
@@ -251,7 +326,7 @@ fn cmd_status(json: bool, short: bool, dirty_only: bool, repo_filter: Option<&st
     println!("Workspace: {}", cfg.workspace);
     println!();
     for s in &statuses {
-        if repo_filter.map_or(true, |r| s.name == r) && (!dirty_only || s.is_dirty) {
+        if repo_filter.is_none_or(|r| s.name == r) && (!dirty_only || s.is_dirty) {
             let dirty = if s.is_dirty { "yes" } else { "no" };
             println!("{}", s.name);
             println!("  branch: {}", s.branch);
@@ -260,7 +335,10 @@ fn cmd_status(json: bool, short: bool, dirty_only: bool, repo_filter: Option<&st
             println!("  unstaged: {}", s.unstaged_count);
             println!("  untracked: {}", s.untracked_count);
             if s.is_dirty {
-                let path = cfg.repos.iter().find(|r| r.name == s.name)
+                let path = cfg
+                    .repos
+                    .iter()
+                    .find(|r| r.name == s.name)
                     .map(|r| r.resolved_path(&cfg));
                 if let Some(p) = path {
                     let diff = git::git_diff_names(&p).unwrap_or_default();
@@ -269,8 +347,12 @@ fn cmd_status(json: bool, short: bool, dirty_only: bool, repo_filter: Option<&st
                     }
                 }
             }
-            if let Some(ref ahead) = s.ahead { println!("  ahead: {}", ahead); }
-            if let Some(ref behind) = s.behind { println!("  behind: {}", behind); }
+            if let Some(ref ahead) = s.ahead {
+                println!("  ahead: {}", ahead);
+            }
+            if let Some(ref behind) = s.behind {
+                println!("  behind: {}", behind);
+            }
             println!();
         }
     }
@@ -281,7 +363,10 @@ fn cmd_diff(repo: Option<&str>, staged: bool, json: bool) -> Result<(), String> 
     let cfg = config::find_and_load()?;
 
     let target_repos: Vec<_> = if let Some(name) = repo {
-        vec![cfg.repos.iter().find(|r| r.name == name)
+        vec![cfg
+            .repos
+            .iter()
+            .find(|r| r.name == name)
             .ok_or_else(|| format!("Repo '{}' not found", name))?]
     } else {
         cfg.repos.iter().collect()
@@ -291,17 +376,25 @@ fn cmd_diff(repo: Option<&str>, staged: bool, json: bool) -> Result<(), String> 
 
     for r in &target_repos {
         let path = r.resolved_path(&cfg);
-        if !path.join(".git").exists() { continue; }
+        if !path.join(".git").exists() {
+            continue;
+        }
 
         let mut args = vec!["diff"];
-        if staged { args.push("--cached"); }
+        if staged {
+            args.push("--cached");
+        }
 
         let output = std::process::Command::new("git")
-            .args(&args).current_dir(&path).output()
+            .args(&args)
+            .current_dir(&path)
+            .output()
             .map_err(|e| format!("git diff: {}", e))?;
 
         let diff_text = String::from_utf8_lossy(&output.stdout).to_string();
-        if diff_text.trim().is_empty() { continue; }
+        if diff_text.trim().is_empty() {
+            continue;
+        }
 
         if json {
             all_diffs.push(serde_json::json!({
@@ -314,9 +407,13 @@ fn cmd_diff(repo: Option<&str>, staged: bool, json: bool) -> Result<(), String> 
     }
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "diffs": all_diffs
-        })).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "diffs": all_diffs
+            }))
+            .unwrap()
+        );
     }
     Ok(())
 }
@@ -330,12 +427,16 @@ fn cmd_dag(mode: Option<&str>, split: Option<&str>, json: bool) -> Result<(), St
     let mut nodes: Vec<serde_json::Value> = Vec::new();
 
     for s in &statuses {
-        if !s.is_dirty { continue; }
+        if !s.is_dirty {
+            continue;
+        }
         let repo_cfg = cfg.repos.iter().find(|r| r.name == s.name);
-        let diff = repo_cfg.map(|r| {
-            let p = r.resolved_path(&cfg);
-            git::git_diff_names(&p).unwrap_or_default()
-        }).unwrap_or_default();
+        let diff = repo_cfg
+            .map(|r| {
+                let p = r.resolved_path(&cfg);
+                git::git_diff_names(&p).unwrap_or_default()
+            })
+            .unwrap_or_default();
 
         if mode != "sync" {
             nodes.push(serde_json::json!({
@@ -348,9 +449,13 @@ fn cmd_dag(mode: Option<&str>, split: Option<&str>, json: bool) -> Result<(), St
 
         match split {
             "by-path" => {
-                let mut by_dir: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+                let mut by_dir: std::collections::HashMap<String, Vec<String>> =
+                    std::collections::HashMap::new();
                 for f in &diff {
-                    let dir = f.rfind('/').map(|i| f[..i].to_string()).unwrap_or_else(|| "root".to_string());
+                    let dir = f
+                        .rfind('/')
+                        .map(|i| f[..i].to_string())
+                        .unwrap_or_else(|| "root".to_string());
                     by_dir.entry(dir).or_default().push(f.clone());
                 }
                 for (dir, files) in &by_dir {
@@ -360,7 +465,7 @@ fn cmd_dag(mode: Option<&str>, split: Option<&str>, json: bool) -> Result<(), St
                         "depends_on": [format!("{}:precheck", s.name)]
                     }));
                 }
-            },
+            }
             _ => {
                 nodes.push(serde_json::json!({
                     "id": format!("{}:commit", s.name),
@@ -372,13 +477,18 @@ fn cmd_dag(mode: Option<&str>, split: Option<&str>, json: bool) -> Result<(), St
     }
 
     if mode == "full" || mode == "sync" {
-        let commit_ids: Vec<String> = nodes.iter()
+        let commit_ids: Vec<String> = nodes
+            .iter()
             .filter(|n| n["kind"] == "commit")
             .filter_map(|n| n["id"].as_str().map(|s| s.to_string()))
             .collect();
 
         if !commit_ids.is_empty() {
-            if let Some(root) = cfg.repos.iter().find(|r| r.name.contains("root") || r.name == "phenix") {
+            if let Some(root) = cfg
+                .repos
+                .iter()
+                .find(|r| r.name.contains("root") || r.name == "phenix")
+            {
                 nodes.push(serde_json::json!({
                     "id": format!("{}:update-pins", root.name),
                     "kind": "update-pins", "repo": root.name,
@@ -390,14 +500,18 @@ fn cmd_dag(mode: Option<&str>, split: Option<&str>, json: bool) -> Result<(), St
     }
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "nodes": nodes, "total": nodes.len(), "mode": mode
-        })).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "nodes": nodes, "total": nodes.len(), "mode": mode
+            }))
+            .unwrap()
+        );
     } else {
         let title = match mode {
             "sync" => "Sync DAG:",
             "full" => "Full DAG:",
-            _ => "Commit DAG:"
+            _ => "Commit DAG:",
         };
         println!("{}", title);
         println!();
@@ -410,7 +524,9 @@ fn cmd_dag(mode: Option<&str>, split: Option<&str>, json: bool) -> Result<(), St
                 if !files.is_empty() {
                     println!("    files:");
                     for f in files {
-                        if let Some(p) = f.as_str() { println!("      {}", p); }
+                        if let Some(p) = f.as_str() {
+                            println!("      {}", p);
+                        }
                     }
                 }
             }
@@ -418,7 +534,9 @@ fn cmd_dag(mode: Option<&str>, split: Option<&str>, json: bool) -> Result<(), St
                 if !deps.is_empty() {
                     println!("    depends_on:");
                     for d in deps {
-                        if let Some(d) = d.as_str() { println!("      {}", d); }
+                        if let Some(d) = d.as_str() {
+                            println!("      {}", d);
+                        }
                     }
                 }
             }
@@ -463,9 +581,10 @@ fn cmd_push(dry_run: bool, json_output: bool) -> Result<(), String> {
     }
 
     if json_output {
-        let nodes: Vec<serde_json::Value> = to_push.iter().map(|(id, name, ahead)| {
-            serde_json::json!({"name": name, "id": id, "ahead": ahead})
-        }).collect();
+        let nodes: Vec<serde_json::Value> = to_push
+            .iter()
+            .map(|(id, name, ahead)| serde_json::json!({"name": name, "id": id, "ahead": ahead}))
+            .collect();
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({
             "push_order": order.iter().filter(|id| to_push.iter().any(|(tid, _, _)| tid == *id)).collect::<Vec<_>>(),
             "nodes": nodes
@@ -485,7 +604,9 @@ fn cmd_push(dry_run: bool, json_output: bool) -> Result<(), String> {
 
     let mut results: BTreeMap<String, Result<(), String>> = BTreeMap::new();
     for (node_id, name, _) in &to_push {
-        let node = dag.get_node(node_id).ok_or_else(|| format!("Node '{}' not found", node_id))?;
+        let node = dag
+            .get_node(node_id)
+            .ok_or_else(|| format!("Node '{}' not found", node_id))?;
         if !json_output {
             print!("  {}... ", name);
         }
@@ -553,16 +674,21 @@ fn cmd_sync_commit(
 
     if !apply {
         println!("{}", sync::format_plan_output(&plan, json_output));
-        return Err("Set --apply to execute the sync commit, or use --plan or --dry-run to preview.".to_string());
+        return Err(
+            "Set --apply to execute the sync commit, or use --plan or --dry-run to preview."
+                .to_string(),
+        );
     }
 
     let messages: Option<BTreeMap<String, String>> = if let Some(path) = messages_path {
         let content = std::fs::read_to_string(path).map_err(|e| format!("Read messages: {}", e))?;
-        let raw: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&content)
-            .map_err(|e| format!("Parse messages: {}", e))?;
+        let raw: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&content).map_err(|e| format!("Parse messages: {}", e))?;
         let mut msgs = BTreeMap::new();
         for (key, val) in raw {
-            let msg = val.get("subject").and_then(|v| v.as_str())
+            let msg = val
+                .get("subject")
+                .and_then(|v| v.as_str())
                 .unwrap_or(&key)
                 .to_string();
             msgs.insert(key, msg);
@@ -611,26 +737,37 @@ fn cmd_commit(
         let mut msgs = serde_json::Map::new();
         for s in &dirty_repos {
             let repo_cfg = cfg.repos.iter().find(|r| r.name == s.name);
-            let diff = repo_cfg.map(|r| {
-                let p = r.resolved_path(&cfg);
-                get_diff(&p)
-            }).unwrap_or_default();
+            let diff = repo_cfg
+                .map(|r| {
+                    let p = r.resolved_path(&cfg);
+                    get_diff(&p)
+                })
+                .unwrap_or_default();
 
-            msgs.insert(format!("{}:commit", s.name), serde_json::json!({
-                "subject": "", "body": "", "files": diff
-            }));
+            msgs.insert(
+                format!("{}:commit", s.name),
+                serde_json::json!({
+                    "subject": "", "body": "", "files": diff
+                }),
+            );
         }
         let path = std::path::Path::new(".stitch").join("messages.json");
         std::fs::create_dir_all(".stitch").ok();
         let content = serde_json::to_string_pretty(&serde_json::json!(msgs)).unwrap();
         std::fs::write(&path, &content).map_err(|e| format!("Write: {}", e))?;
         println!("Message template written to {}", path.display());
-        println!("Edit it, then run: stitch commit --messages {}", path.display());
+        println!(
+            "Edit it, then run: stitch commit --messages {}",
+            path.display()
+        );
         return Ok(());
     }
 
     if message.is_none() && messages_path.is_none() && dirty_repos.len() > 1 {
-        println!("{} repos need commits but no message provided.", dirty_repos.len());
+        println!(
+            "{} repos need commits but no message provided.",
+            dirty_repos.len()
+        );
         println!();
         println!("To write a single message: stitch commit -m \"message\"");
         println!("To write per-repo messages: stitch commit --write-template");
@@ -642,7 +779,8 @@ fn cmd_commit(
         return Err("Set --apply to commit, or --dry-run to preview".to_string());
     }
 
-    let msgs: Option<serde_json::Map<String, serde_json::Value>> = if let Some(path) = messages_path {
+    let msgs: Option<serde_json::Map<String, serde_json::Value>> = if let Some(path) = messages_path
+    {
         let content = std::fs::read_to_string(path).map_err(|e| format!("Read messages: {}", e))?;
         Some(serde_json::from_str(&content).map_err(|e| format!("Parse messages: {}", e))?)
     } else {
@@ -653,22 +791,38 @@ fn cmd_commit(
         let root = std::env::current_dir().unwrap_or_default();
         if let Ok(discovered) = tend::discover::discover_configs(&root, None) {
             let nodes = tend::discover::resolve_nodes(&root, discovered);
-            let req = PlanRequest { phase: Phase::Verify, mode: RunMode::Changed, group: None, target: None, files: vec![] };
+            let req = PlanRequest {
+                phase: Phase::Verify,
+                mode: RunMode::Changed,
+                group: None,
+                target: None,
+                files: vec![],
+            };
             if let Ok(plan) = tend::planner::build_plan(&nodes, &req) {
                 let results = tend::execute::execute_plan(&plan.items, &root);
                 let failures: Vec<_> = results.iter().filter(|r| r.outcome.is_failure()).collect();
                 if !failures.is_empty() {
-                    return Err(format!("Tend gate blocked: {} check(s) failed. Run `tend run` to see details.", failures.len()));
+                    return Err(format!(
+                        "Tend gate blocked: {} check(s) failed. Run `tend run` to see details.",
+                        failures.len()
+                    ));
                 }
             }
         }
     }
 
     for s in &dirty_repos {
-        if let Some(r) = repo { if s.name != *r { continue; } }
+        if let Some(r) = repo {
+            if s.name != *r {
+                continue;
+            }
+        }
 
         let repo_cfg = cfg.repos.iter().find(|r| r.name == s.name);
-        let repo_cfg = match repo_cfg { Some(r) => r, None => continue };
+        let repo_cfg = match repo_cfg {
+            Some(r) => r,
+            None => continue,
+        };
         let repo_path = repo_cfg.resolved_path(&cfg);
 
         let diff = get_diff(&repo_path);
@@ -676,26 +830,51 @@ fn cmd_commit(
 
         let files_to_stage: Vec<String> = if let Some(ref msgs) = msgs {
             if let Some(node_msg) = msgs.get(&node_key) {
-                node_msg.get("files").and_then(|v| v.as_array())
-                    .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+                node_msg
+                    .get("files")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str())
+                            .map(|s| s.to_string())
+                            .collect()
+                    })
                     .unwrap_or(diff.clone())
-            } else { diff.clone() }
-        } else { diff.clone() };
+            } else {
+                diff.clone()
+            }
+        } else {
+            diff.clone()
+        };
 
         let msg = if let Some(ref msgs) = msgs {
             if let Some(node_msg) = msgs.get(&node_key) {
-                node_msg.get("subject").and_then(|v| v.as_str()).unwrap_or(message.unwrap_or("")).to_string()
-            } else { message.unwrap_or(&format!("Apply changes to {}", s.name)).to_string() }
-        } else { message.unwrap_or(&format!("Apply changes to {}", s.name)).to_string() };
+                node_msg
+                    .get("subject")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(message.unwrap_or(""))
+                    .to_string()
+            } else {
+                message
+                    .unwrap_or(&format!("Apply changes to {}", s.name))
+                    .to_string()
+            }
+        } else {
+            message
+                .unwrap_or(&format!("Apply changes to {}", s.name))
+                .to_string()
+        };
 
         if dry_run {
             println!("[dry-run] {}: {}", s.name, msg);
-            for f in &files_to_stage { println!("         {}", f); }
+            for f in &files_to_stage {
+                println!("         {}", f);
+            }
             continue;
         }
 
         git::git_add(&repo_path, &files_to_stage)?;
-        let trailed = model::add_trailers(&msg, &"cli", &cfg.workspace);
+        let trailed = model::add_trailers(&msg, "cli", &cfg.workspace);
         git::git_commit(&repo_path, &trailed)?;
         let hash = git::git_short_head(&repo_path).ok();
         println!("  committed {}: {}", s.name, hash.unwrap_or_default());

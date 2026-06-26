@@ -40,11 +40,17 @@ pub struct GitChange {
 
 impl GitChange {
     pub fn is_staged(&self) -> bool {
-        !matches!(self.index_status, IndexStatus::Unmodified | IndexStatus::Untracked | IndexStatus::Ignored)
+        !matches!(
+            self.index_status,
+            IndexStatus::Unmodified | IndexStatus::Untracked | IndexStatus::Ignored
+        )
     }
 
     pub fn is_unstaged(&self) -> bool {
-        !matches!(self.worktree_status, WorktreeStatus::Unmodified | WorktreeStatus::Untracked | WorktreeStatus::Ignored)
+        !matches!(
+            self.worktree_status,
+            WorktreeStatus::Unmodified | WorktreeStatus::Untracked | WorktreeStatus::Ignored
+        )
     }
 
     pub fn is_untracked(&self) -> bool {
@@ -76,15 +82,29 @@ impl GitStatus {
     }
 
     pub fn staged_files(&self) -> Vec<&str> {
-        self.changes.iter().filter_map(|c| {
-            if c.is_staged() { Some(c.path.as_str()) } else { None }
-        }).collect()
+        self.changes
+            .iter()
+            .filter_map(|c| {
+                if c.is_staged() {
+                    Some(c.path.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     pub fn unstaged_files(&self) -> Vec<&str> {
-        self.changes.iter().filter_map(|c| {
-            if c.is_unstaged() { Some(c.path.as_str()) } else { None }
-        }).collect()
+        self.changes
+            .iter()
+            .filter_map(|c| {
+                if c.is_unstaged() {
+                    Some(c.path.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     pub fn all_files(&self) -> Vec<&str> {
@@ -116,7 +136,9 @@ impl GitRepo {
         if !output.status.success() {
             return Err(format!("Not a git repository: {}", path.display()));
         }
-        Ok(Self { path: path.to_path_buf() })
+        Ok(Self {
+            path: path.to_path_buf(),
+        })
     }
 
     pub fn status(&self) -> Result<GitStatus, String> {
@@ -133,7 +155,10 @@ impl GitRepo {
             .output()
             .map_err(|e| format!("git branch: {}", e))?;
         if !output.status.success() {
-            return Err(format!("Not a git repo or no HEAD: {}", self.path.display()));
+            return Err(format!(
+                "Not a git repo or no HEAD: {}",
+                self.path.display()
+            ));
         }
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
@@ -401,12 +426,20 @@ pub fn git_push(repo: &Path, branch: &str) -> Result<(), String> {
 
 pub fn git_diff_names(repo: &Path) -> Result<Vec<String>, String> {
     let git_status = GitRepo::open(repo)?.status()?;
-    Ok(git_status.all_files().into_iter().map(|s| s.to_string()).collect())
+    Ok(git_status
+        .all_files()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect())
 }
 
 pub fn git_diff_cached_names(repo: &Path) -> Result<Vec<String>, String> {
     let git_status = GitRepo::open(repo)?.status()?;
-    Ok(git_status.staged_files().into_iter().map(|s| s.to_string()).collect())
+    Ok(git_status
+        .staged_files()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect())
 }
 
 pub fn has_merge_conflict_markers(repo: &Path) -> Result<bool, String> {

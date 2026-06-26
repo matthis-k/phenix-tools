@@ -11,9 +11,15 @@ pub enum CheckOutcome {
 }
 
 impl CheckOutcome {
-    pub fn is_pass(&self) -> bool { matches!(self, Self::Passed) }
-    pub fn is_skip(&self) -> bool { matches!(self, Self::Skipped { .. }) }
-    pub fn is_failure(&self) -> bool { matches!(self, Self::Failed { .. } | Self::Errored { .. }) }
+    pub fn is_pass(&self) -> bool {
+        matches!(self, Self::Passed)
+    }
+    pub fn is_skip(&self) -> bool {
+        matches!(self, Self::Skipped { .. })
+    }
+    pub fn is_failure(&self) -> bool {
+        matches!(self, Self::Failed { .. } | Self::Errored { .. })
+    }
 }
 
 pub struct CheckResult {
@@ -24,7 +30,11 @@ pub struct CheckResult {
 
 impl CheckResult {
     pub fn pass_with(stdout: String, stderr: String) -> Self {
-        Self { outcome: CheckOutcome::Passed, stdout, stderr }
+        Self {
+            outcome: CheckOutcome::Passed,
+            stdout,
+            stderr,
+        }
     }
 
     pub fn pass() -> Self {
@@ -32,14 +42,30 @@ impl CheckResult {
     }
 
     pub fn fail(reason: impl Into<String>) -> Self {
-        Self { outcome: CheckOutcome::Failed { reason: reason.into() }, stdout: String::new(), stderr: String::new() }
+        Self {
+            outcome: CheckOutcome::Failed {
+                reason: reason.into(),
+            },
+            stdout: String::new(),
+            stderr: String::new(),
+        }
     }
 
     pub fn skip() -> Self {
-        Self { outcome: CheckOutcome::Skipped { reason: String::new() }, stdout: String::new(), stderr: String::new() }
+        Self {
+            outcome: CheckOutcome::Skipped {
+                reason: String::new(),
+            },
+            stdout: String::new(),
+            stderr: String::new(),
+        }
     }
 
     pub fn error(msg: impl Into<String>) -> Self {
-        Self { outcome: CheckOutcome::Errored { reason: msg.into() }, stdout: String::new(), stderr: String::new() }
+        Self {
+            outcome: CheckOutcome::Errored { reason: msg.into() },
+            stdout: String::new(),
+            stderr: String::new(),
+        }
     }
 }

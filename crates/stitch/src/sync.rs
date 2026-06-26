@@ -4,7 +4,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::git;
-use crate::graph::{FlakeNode, WorkspaceGraph, NodeId};
+use crate::graph::{FlakeNode, NodeId, WorkspaceGraph};
 #[allow(unused_imports)]
 use crate::model::{RepoAvailability, RepoStatus, WorkspaceConfig};
 
@@ -153,7 +153,7 @@ fn rand_byte() -> u32 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .subsec_nanos();
-    (t & 0xFFFF) as u32
+    t & 0xFFFF
 }
 
 fn timestamp_now() -> String {
@@ -168,22 +168,52 @@ fn timestamp_now() -> String {
     let seconds = time_secs % 60;
     let y = 1970_f64 + (days as f64 - 1.0) / 365.25;
     let year = y as u64;
-    let remaining = days as u64 - ((year - 1970) * 365 + (year - 1969) / 4);
-    let month_days = [31, if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let remaining = days - ((year - 1970) * 365 + (year - 1969) / 4);
+    let month_days = [
+        31,
+        if year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400)) {
+            29
+        } else {
+            28
+        },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut month = 1;
     let mut day = remaining;
     for &md in &month_days {
-        if day <= md { break; }
+        if day <= md {
+            break;
+        }
         day -= md;
         month += 1;
     }
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, day + 1, hours, minutes, seconds)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year,
+        month,
+        day + 1,
+        hours,
+        minutes,
+        seconds
+    )
 }
 
 fn default_message(node_name: &str, sha: Option<&str>) -> String {
     match sha {
-        Some(s) => format!("chore(stitch): sync DAG inputs\n\nIncludes updates from:\n- {}: {}", node_name, s),
-        None => format!("chore(stitch): commit workspace changes"),
+        Some(s) => format!(
+            "chore(stitch): sync DAG inputs\n\nIncludes updates from:\n- {}: {}",
+            node_name, s
+        ),
+        None => "chore(stitch): commit workspace changes".to_string(),
     }
 }
 
@@ -352,18 +382,17 @@ pub fn plan_commit(
     })
 }
 
-fn load_validation_commands(node: &FlakeNode, _graph: &WorkspaceGraph) -> Result<Vec<Vec<String>>, String> {
+fn load_validation_commands(
+    node: &FlakeNode,
+    _graph: &WorkspaceGraph,
+) -> Result<Vec<Vec<String>>, String> {
     let sync_path = node.path.join("sync.json");
     if sync_path.exists() {
-        let content = std::fs::read_to_string(&sync_path)
-            .map_err(|e| format!("Read sync.json: {}", e))?;
-        let sync: crate::graph::SyncJson = serde_json::from_str(&content)
-            .map_err(|e| format!("Parse sync.json: {}", e))?;
-        let commands: Vec<Vec<String>> = sync
-            .checks
-            .iter()
-            .map(|c| shlex_split(c))
-            .collect();
+        let content =
+            std::fs::read_to_string(&sync_path).map_err(|e| format!("Read sync.json: {}", e))?;
+        let sync: crate::graph::SyncJson =
+            serde_json::from_str(&content).map_err(|e| format!("Parse sync.json: {}", e))?;
+        let commands: Vec<Vec<String>> = sync.checks.iter().map(|c| shlex_split(c)).collect();
         return Ok(commands);
     }
     Ok(Vec::new())
@@ -426,10 +455,12 @@ fn execute_plan(
         actions: Vec::new(),
     };
 
-    for (_i, action) in plan.actions.iter().enumerate() {
+    for action in plan.actions.iter() {
         let node_id = action.node();
         if !journal.nodes.contains_key(node_id) {
-            let node = graph.get_node(node_id).ok_or_else(|| format!("Node '{}' not found", node_id))?;
+            let node = graph
+                .get_node(node_id)
+                .ok_or_else(|| format!("Node '{}' not found", node_id))?;
             journal.nodes.insert(
                 node_id.clone(),
                 NodeJournalEntry {
@@ -441,7 +472,11 @@ fn execute_plan(
             );
         }
         let expected_files = if matches!(action, Action::Commit { .. }) {
-            let repo_path = journal.nodes.get(node_id).map(|n| n.path.clone()).unwrap_or_default();
+            let repo_path = journal
+                .nodes
+                .get(node_id)
+                .map(|n| n.path.clone())
+                .unwrap_or_default();
             collect_all_changed_files(Path::new(&repo_path)).unwrap_or_default()
         } else {
             Vec::new()
@@ -479,7 +514,16 @@ fn execute_plan(
         write_journal(&journal, cfg)?;
 
         let action_result = execute_single_action(
-            action, action_idx, &plan, &graph, cfg, no_push, messages, &mut commit_shas, &mut push_results, &mut journal,
+            action,
+            action_idx,
+            plan,
+            graph,
+            cfg,
+            no_push,
+            messages,
+            &mut commit_shas,
+            &mut push_results,
+            &mut journal,
         );
 
         match action_result {
@@ -512,6 +556,7 @@ fn execute_plan(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_single_action(
     action: &Action,
     _action_idx: usize,
@@ -525,7 +570,10 @@ fn execute_single_action(
     journal: &mut TransactionJournal,
 ) -> Result<(), String> {
     match action {
-        Action::Commit { node: node_id, message } => {
+        Action::Commit {
+            node: node_id,
+            message,
+        } => {
             let node = match graph.get_node(node_id) {
                 Some(n) => n,
                 None => return Ok(()),
@@ -552,7 +600,11 @@ fn execute_single_action(
             }
             Ok(())
         }
-        Action::UpdateInputs { node: node_id, updates, message } => {
+        Action::UpdateInputs {
+            node: node_id,
+            updates,
+            message,
+        } => {
             let node = match graph.get_node(node_id) {
                 Some(n) => n,
                 None => return Ok(()),
@@ -587,7 +639,8 @@ fn execute_single_action(
                     .unwrap_or_else(|| message.clone());
 
                 git::git_add(&node.path, &[lock_path.to_string_lossy().to_string()])?;
-                let trailed = crate::model::add_trailers(&msg, &plan.transaction_id, &cfg.workspace);
+                let trailed =
+                    crate::model::add_trailers(&msg, &plan.transaction_id, &cfg.workspace);
                 git::git_commit(&node.path, &trailed)?;
                 let sha = git::git_head(&node.path)?;
                 commit_shas.insert(node_id.clone(), sha.clone());
@@ -624,7 +677,11 @@ fn execute_single_action(
             if lock_path.exists() && plan_node.needs_input_sync {
                 for update in &plan_node.dependencies_to_update {
                     let expected_rev = commit_shas.get(&update.dependency_node);
-                    verify_lockfile_rev(&lock_path, &update.input_name, expected_rev.map(|s| s.as_str()))?;
+                    verify_lockfile_rev(
+                        &lock_path,
+                        &update.input_name,
+                        expected_rev.map(|s| s.as_str()),
+                    )?;
                 }
             }
 
@@ -673,7 +730,11 @@ fn execute_single_action(
                         entry.pushed = true;
                     }
                     let action_id = action_id(action);
-                    if let Some(entry) = journal.actions.iter_mut().find(|e| e.action_id == action_id) {
+                    if let Some(entry) = journal
+                        .actions
+                        .iter_mut()
+                        .find(|e| e.action_id == action_id)
+                    {
                         entry.pushed = true;
                     }
                     Ok(())
@@ -703,7 +764,11 @@ fn execute_single_action(
 fn collect_all_changed_files(repo: &Path) -> Result<Vec<String>, String> {
     let git_repo = git::GitRepo::open(repo)?;
     let status = git_repo.status()?;
-    let mut files: Vec<String> = status.all_files().into_iter().map(|s| s.to_string()).collect();
+    let mut files: Vec<String> = status
+        .all_files()
+        .into_iter()
+        .map(|s| s.to_string())
+        .collect();
     files.sort();
     Ok(files)
 }
@@ -763,10 +828,10 @@ fn verify_lockfile_rev(
         return Ok(());
     }
 
-    let content = std::fs::read_to_string(lock_path)
-        .map_err(|e| format!("Read flake.lock: {}", e))?;
-    let lock: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Parse flake.lock: {}", e))?;
+    let content =
+        std::fs::read_to_string(lock_path).map_err(|e| format!("Read flake.lock: {}", e))?;
+    let lock: serde_json::Value =
+        serde_json::from_str(&content).map_err(|e| format!("Parse flake.lock: {}", e))?;
 
     let rev = lock
         .get("nodes")
@@ -819,7 +884,9 @@ pub fn resume_sync(
     }
 
     let mut push_results: BTreeMap<String, Result<(), String>> = BTreeMap::new();
-    let mut commit_shas: BTreeMap<NodeId, String> = journal.nodes.iter()
+    let mut commit_shas: BTreeMap<NodeId, String> = journal
+        .nodes
+        .iter()
         .filter_map(|(id, e)| e.commit_sha.clone().map(|sha| (id.clone(), sha)))
         .collect();
     let mut any_failed = false;
@@ -833,9 +900,14 @@ pub fn resume_sync(
         }
         if matches!(entry.action, Action::Commit { .. }) {
             let current_files = collect_all_changed_files(
-                &resume_journal.nodes.get(&entry.node).map(|n| Path::new(&n.path)).unwrap_or(Path::new("."))
+                resume_journal
+                    .nodes
+                    .get(&entry.node)
+                    .map(|n| Path::new(&n.path))
+                    .unwrap_or(Path::new(".")),
             )?;
-            let unexpected: Vec<&String> = current_files.iter()
+            let unexpected: Vec<&String> = current_files
+                .iter()
                 .filter(|f| !entry.expected_files.contains(f))
                 .collect();
             if !unexpected.is_empty() {
@@ -860,26 +932,48 @@ pub fn resume_sync(
         }
 
         match &entry.action {
-            Action::Commit { node: node_id, message: _ } => {
+            Action::Commit {
+                node: node_id,
+                message: _,
+            } => {
                 let current_files = collect_all_changed_files(
-                    &resume_journal.nodes.get(node_id).map(|n| Path::new(&n.path)).unwrap_or(Path::new("."))
+                    resume_journal
+                        .nodes
+                        .get(node_id)
+                        .map(|n| Path::new(&n.path))
+                        .unwrap_or(Path::new(".")),
                 )?;
                 if current_files.is_empty() {
-                    if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
+                    if let Some(e) = resume_journal
+                        .actions
+                        .iter_mut()
+                        .find(|e| e.action_id == entry.action_id)
+                    {
                         e.state = ActionState::Done;
                     }
                     write_journal(&resume_journal, cfg)?;
                     continue;
                 }
 
-                let node_path = resume_journal.nodes.get(node_id).map(|n| n.path.clone()).unwrap_or_default();
-                if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
+                let node_path = resume_journal
+                    .nodes
+                    .get(node_id)
+                    .map(|n| n.path.clone())
+                    .unwrap_or_default();
+                if let Some(e) = resume_journal
+                    .actions
+                    .iter_mut()
+                    .find(|e| e.action_id == entry.action_id)
+                {
                     e.state = ActionState::Pending;
                 }
                 write_journal(&resume_journal, cfg)?;
 
                 let msg = if let Some(sha) = commit_shas.get(node_id) {
-                    format!("chore(stitch): resume commit for {}\n\nPrevious: {}", node_id, sha)
+                    format!(
+                        "chore(stitch): resume commit for {}\n\nPrevious: {}",
+                        node_id, sha
+                    )
                 } else {
                     format!("chore(stitch): resume commit for {}", node_id)
                 };
@@ -890,7 +984,11 @@ pub fn resume_sync(
                 let sha = git::git_head(Path::new(&node_path))?;
                 commit_shas.insert(node_id.clone(), sha.clone());
 
-                if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
+                if let Some(e) = resume_journal
+                    .actions
+                    .iter_mut()
+                    .find(|e| e.action_id == entry.action_id)
+                {
                     e.state = ActionState::Done;
                     e.commit_sha = Some(sha.clone());
                 }
@@ -899,9 +997,21 @@ pub fn resume_sync(
                 }
                 write_journal(&resume_journal, cfg)?;
             }
-            Action::UpdateInputs { node: node_id, updates, .. } => {
-                let node_path = resume_journal.nodes.get(node_id).map(|n| n.path.clone()).unwrap_or_default();
-                if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
+            Action::UpdateInputs {
+                node: node_id,
+                updates,
+                ..
+            } => {
+                let node_path = resume_journal
+                    .nodes
+                    .get(node_id)
+                    .map(|n| n.path.clone())
+                    .unwrap_or_default();
+                if let Some(e) = resume_journal
+                    .actions
+                    .iter_mut()
+                    .find(|e| e.action_id == entry.action_id)
+                {
                     e.state = ActionState::Running;
                 }
                 write_journal(&resume_journal, cfg)?;
@@ -920,14 +1030,21 @@ pub fn resume_sync(
 
                 let lock_path = Path::new(&node_path).join("flake.lock");
                 if lock_path.exists() {
-                    git::git_add(Path::new(&node_path), &[lock_path.to_string_lossy().to_string()])?;
+                    git::git_add(
+                        Path::new(&node_path),
+                        &[lock_path.to_string_lossy().to_string()],
+                    )?;
                     let msg = format!("chore(inputs): resume sync for {}", node_id);
                     let trailed = crate::model::add_trailers(&msg, transaction_id, &cfg.workspace);
                     git::git_commit(Path::new(&node_path), &trailed)?;
                     let sha = git::git_head(Path::new(&node_path))?;
                     commit_shas.insert(node_id.clone(), sha.clone());
 
-                    if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
+                    if let Some(e) = resume_journal
+                        .actions
+                        .iter_mut()
+                        .find(|e| e.action_id == entry.action_id)
+                    {
                         e.state = ActionState::Done;
                         e.commit_sha = Some(sha.clone());
                     }
@@ -936,14 +1053,22 @@ pub fn resume_sync(
                     }
                     write_journal(&resume_journal, cfg)?;
                 } else {
-                    if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
+                    if let Some(e) = resume_journal
+                        .actions
+                        .iter_mut()
+                        .find(|e| e.action_id == entry.action_id)
+                    {
                         e.state = ActionState::Done;
                     }
                     write_journal(&resume_journal, cfg)?;
                 }
             }
             Action::Validate { node: node_id } => {
-                let node_path = resume_journal.nodes.get(node_id).map(|n| n.path.clone()).unwrap_or_default();
+                let node_path = resume_journal
+                    .nodes
+                    .get(node_id)
+                    .map(|n| n.path.clone())
+                    .unwrap_or_default();
                 let sync_path = Path::new(&node_path).join("sync.json");
                 let commands: Vec<Vec<String>> = if sync_path.exists() {
                     let content = std::fs::read_to_string(&sync_path)
@@ -975,7 +1100,11 @@ pub fn resume_sync(
                     }
                 }
 
-                if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
+                if let Some(e) = resume_journal
+                    .actions
+                    .iter_mut()
+                    .find(|e| e.action_id == entry.action_id)
+                {
                     e.state = ActionState::Done;
                 }
                 write_journal(&resume_journal, cfg)?;
@@ -988,22 +1117,36 @@ pub fn resume_sync(
 
                 if no_push {
                     push_results.insert(node_id.clone(), Err("Skipped (--no-push)".to_string()));
-                    if let Some(e) = resume_journal.actions.iter_mut().find(|e| e.action_id == entry.action_id) {
+                    if let Some(e) = resume_journal
+                        .actions
+                        .iter_mut()
+                        .find(|e| e.action_id == entry.action_id)
+                    {
                         e.state = ActionState::Done;
                     }
                     write_journal(&resume_journal, cfg)?;
                     continue;
                 }
 
-                let node_path = resume_journal.nodes.get(node_id).map(|n| n.path.clone()).unwrap_or_default();
-                let branch = resume_journal.nodes.get(node_id)
+                let node_path = resume_journal
+                    .nodes
+                    .get(node_id)
+                    .map(|n| n.path.clone())
+                    .unwrap_or_default();
+                let branch = resume_journal
+                    .nodes
+                    .get(node_id)
                     .and_then(|n| n.branch.as_deref())
                     .unwrap_or("main");
                 let result = git_push(Path::new(&node_path), branch);
                 if let Err(ref e) = result {
                     push_results.insert(node_id.clone(), Err(e.clone()));
                     any_failed = true;
-                    if let Some(je) = resume_journal.actions.iter_mut().find(|je| je.action_id == entry.action_id) {
+                    if let Some(je) = resume_journal
+                        .actions
+                        .iter_mut()
+                        .find(|je| je.action_id == entry.action_id)
+                    {
                         je.state = ActionState::Failed;
                         je.error = Some(e.clone());
                     }
@@ -1013,7 +1156,11 @@ pub fn resume_sync(
                 }
 
                 push_results.insert(node_id.clone(), Ok(()));
-                if let Some(je) = resume_journal.actions.iter_mut().find(|je| je.action_id == entry.action_id) {
+                if let Some(je) = resume_journal
+                    .actions
+                    .iter_mut()
+                    .find(|je| je.action_id == entry.action_id)
+                {
                     je.state = ActionState::Done;
                     je.pushed = true;
                 }
@@ -1062,33 +1209,45 @@ fn journal_dir(cfg: &WorkspaceConfig) -> Result<std::path::PathBuf, String> {
 fn write_journal(journal: &TransactionJournal, cfg: &WorkspaceConfig) -> Result<(), String> {
     let dir = journal_dir(cfg)?;
     let path = dir.join(format!("{}.json", journal.transaction_id));
-    let content = serde_json::to_string_pretty(journal)
-        .map_err(|e| format!("Serialize journal: {}", e))?;
+    let content =
+        serde_json::to_string_pretty(journal).map_err(|e| format!("Serialize journal: {}", e))?;
     std::fs::write(&path, content).map_err(|e| format!("Write journal: {}", e))?;
     Ok(())
 }
 
-fn load_journal(transaction_id: &str, cfg: &WorkspaceConfig) -> Result<Option<TransactionJournal>, String> {
+fn load_journal(
+    transaction_id: &str,
+    cfg: &WorkspaceConfig,
+) -> Result<Option<TransactionJournal>, String> {
     let dir = journal_dir(cfg)?;
     let path = dir.join(format!("{}.json", transaction_id));
     if !path.exists() {
         return Ok(None);
     }
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Read journal: {}", e))?;
-    let journal: TransactionJournal = serde_json::from_str(&content)
-        .map_err(|e| format!("Parse journal: {}", e))?;
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("Read journal: {}", e))?;
+    let journal: TransactionJournal =
+        serde_json::from_str(&content).map_err(|e| format!("Parse journal: {}", e))?;
     Ok(Some(journal))
 }
 
 pub fn format_plan_output(plan: &ActionPlan, json_output: bool) -> String {
     if json_output {
-        let action_list: Vec<serde_json::Value> = plan.actions.iter().map(|a| match a {
-            Action::Commit { node, .. } => serde_json::json!({ "type": "commit", "node": node }),
-            Action::UpdateInputs { node, .. } => serde_json::json!({ "type": "update-inputs", "node": node }),
-            Action::Validate { node } => serde_json::json!({ "type": "validate", "node": node }),
-            Action::Push { node } => serde_json::json!({ "type": "push", "node": node }),
-        }).collect();
+        let action_list: Vec<serde_json::Value> = plan
+            .actions
+            .iter()
+            .map(|a| match a {
+                Action::Commit { node, .. } => {
+                    serde_json::json!({ "type": "commit", "node": node })
+                }
+                Action::UpdateInputs { node, .. } => {
+                    serde_json::json!({ "type": "update-inputs", "node": node })
+                }
+                Action::Validate { node } => {
+                    serde_json::json!({ "type": "validate", "node": node })
+                }
+                Action::Push { node } => serde_json::json!({ "type": "push", "node": node }),
+            })
+            .collect();
 
         return serde_json::to_string_pretty(&serde_json::json!({
             "decision": if plan.blocked_reasons.is_empty() { "ready" } else { "blocked" },
@@ -1131,7 +1290,10 @@ pub fn format_plan_output(plan: &ActionPlan, json_output: bool) -> String {
             Action::UpdateInputs { node, updates, .. } => {
                 output.push_str(&format!("  {}. {}: update-inputs\n", i + 1, node));
                 for u in updates {
-                    output.push_str(&format!("       {} -> {}\n", u.input_name, u.dependency_node));
+                    output.push_str(&format!(
+                        "       {} -> {}\n",
+                        u.input_name, u.dependency_node
+                    ));
                 }
             }
             Action::Validate { node } => {
@@ -1247,11 +1409,23 @@ mod tests {
     #[test]
     fn test_plan_sync_dirty_tools() {
         let graph = make_test_graph();
-        let statuses = vec![make_status("tools", true), make_status("shell", false), make_status("root", false)];
-        let cfg = WorkspaceConfig { version: 1, workspace: "test".to_string(), repos: vec![], config_dir: None };
+        let statuses = vec![
+            make_status("tools", true),
+            make_status("shell", false),
+            make_status("root", false),
+        ];
+        let cfg = WorkspaceConfig {
+            version: 1,
+            workspace: "test".to_string(),
+            repos: vec![],
+            config_dir: None,
+        };
         let plan = plan_sync(&graph, &statuses, &cfg).unwrap();
         let order = action_nodes(&plan);
-        assert_eq!(order, vec!["tools", "shell", "root", "tools", "shell", "root", "tools", "shell", "root"]);
+        assert_eq!(
+            order,
+            vec!["tools", "shell", "root", "tools", "shell", "root", "tools", "shell", "root"]
+        );
         let tools = plan.node_plans.get("tools").unwrap();
         assert!(tools.needs_code_commit);
         assert!(!tools.needs_input_sync);
@@ -1276,11 +1450,23 @@ mod tests {
     #[test]
     fn test_plan_sync_dirty_shell() {
         let graph = make_test_graph();
-        let statuses = vec![make_status("tools", false), make_status("shell", true), make_status("root", false)];
-        let cfg = WorkspaceConfig { version: 1, workspace: "test".to_string(), repos: vec![], config_dir: None };
+        let statuses = vec![
+            make_status("tools", false),
+            make_status("shell", true),
+            make_status("root", false),
+        ];
+        let cfg = WorkspaceConfig {
+            version: 1,
+            workspace: "test".to_string(),
+            repos: vec![],
+            config_dir: None,
+        };
         let plan = plan_sync(&graph, &statuses, &cfg).unwrap();
         let order = action_nodes(&plan);
-        assert_eq!(order, vec!["shell", "root", "shell", "root", "shell", "root"]);
+        assert_eq!(
+            order,
+            vec!["shell", "root", "shell", "root", "shell", "root"]
+        );
         let shell = plan.node_plans.get("shell").unwrap();
         assert!(shell.needs_code_commit);
         assert!(!shell.needs_input_sync);
@@ -1292,8 +1478,17 @@ mod tests {
     #[test]
     fn test_plan_sync_dirty_root() {
         let graph = make_test_graph();
-        let statuses = vec![make_status("tools", false), make_status("shell", false), make_status("root", true)];
-        let cfg = WorkspaceConfig { version: 1, workspace: "test".to_string(), repos: vec![], config_dir: None };
+        let statuses = vec![
+            make_status("tools", false),
+            make_status("shell", false),
+            make_status("root", true),
+        ];
+        let cfg = WorkspaceConfig {
+            version: 1,
+            workspace: "test".to_string(),
+            repos: vec![],
+            config_dir: None,
+        };
         let plan = plan_sync(&graph, &statuses, &cfg).unwrap();
         let order = action_nodes(&plan);
         assert_eq!(order, vec!["root", "root", "root"]);
@@ -1305,12 +1500,27 @@ mod tests {
     #[test]
     fn test_plan_sync_dirty_tools_and_shell() {
         let graph = make_test_graph();
-        let statuses = vec![make_status("tools", true), make_status("shell", true), make_status("root", false)];
-        let cfg = WorkspaceConfig { version: 1, workspace: "test".to_string(), repos: vec![], config_dir: None };
+        let statuses = vec![
+            make_status("tools", true),
+            make_status("shell", true),
+            make_status("root", false),
+        ];
+        let cfg = WorkspaceConfig {
+            version: 1,
+            workspace: "test".to_string(),
+            repos: vec![],
+            config_dir: None,
+        };
         let plan = plan_sync(&graph, &statuses, &cfg).unwrap();
         let order = action_nodes(&plan);
         // tools: commit; shell: commit + update-inputs; root: update-inputs
-        assert_eq!(order, vec!["tools", "shell", "shell", "root", "tools", "shell", "root", "tools", "shell", "root"]);
+        assert_eq!(
+            order,
+            vec![
+                "tools", "shell", "shell", "root", "tools", "shell", "root", "tools", "shell",
+                "root"
+            ]
+        );
         let tools = plan.node_plans.get("tools").unwrap();
         assert!(tools.needs_code_commit);
         assert!(!tools.needs_input_sync);
@@ -1325,8 +1535,17 @@ mod tests {
     #[test]
     fn test_plan_sync_no_dirty() {
         let graph = make_test_graph();
-        let statuses = vec![make_status("tools", false), make_status("shell", false), make_status("root", false)];
-        let cfg = WorkspaceConfig { version: 1, workspace: "test".to_string(), repos: vec![], config_dir: None };
+        let statuses = vec![
+            make_status("tools", false),
+            make_status("shell", false),
+            make_status("root", false),
+        ];
+        let cfg = WorkspaceConfig {
+            version: 1,
+            workspace: "test".to_string(),
+            repos: vec![],
+            config_dir: None,
+        };
         let plan = plan_sync(&graph, &statuses, &cfg).unwrap();
         assert!(plan.actions.is_empty());
     }
@@ -1334,16 +1553,41 @@ mod tests {
     #[test]
     fn test_plan_push_order_equals_commit_order() {
         let graph = make_test_graph();
-        let statuses = vec![make_status("tools", true), make_status("shell", true), make_status("root", true)];
-        let cfg = WorkspaceConfig { version: 1, workspace: "test".to_string(), repos: vec![], config_dir: None };
+        let statuses = vec![
+            make_status("tools", true),
+            make_status("shell", true),
+            make_status("root", true),
+        ];
+        let cfg = WorkspaceConfig {
+            version: 1,
+            workspace: "test".to_string(),
+            repos: vec![],
+            config_dir: None,
+        };
         let plan = plan_sync(&graph, &statuses, &cfg).unwrap();
         // Push actions should be last, one per affected node in the same order
-        let commit_nodes: Vec<&str> = plan.actions.iter().filter_map(|a| {
-            if matches!(a, Action::Commit { .. }) { Some(a.node().as_str()) } else { None }
-        }).collect();
-        let push_nodes: Vec<&str> = plan.actions.iter().filter_map(|a| {
-            if matches!(a, Action::Push { .. }) { Some(a.node().as_str()) } else { None }
-        }).collect();
+        let commit_nodes: Vec<&str> = plan
+            .actions
+            .iter()
+            .filter_map(|a| {
+                if matches!(a, Action::Commit { .. }) {
+                    Some(a.node().as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let push_nodes: Vec<&str> = plan
+            .actions
+            .iter()
+            .filter_map(|a| {
+                if matches!(a, Action::Push { .. }) {
+                    Some(a.node().as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
         assert_eq!(commit_nodes, push_nodes);
     }
 
@@ -1371,7 +1615,11 @@ mod tests {
         f.write_all(lock_content.as_bytes()).unwrap();
 
         // Without nix available, this should fail (no direct fallback anymore)
-        let result = update_flake_lock_input(&dir, "phenix-pins", "def4567890123456789012345678901234567890");
+        let result = update_flake_lock_input(
+            &dir,
+            "phenix-pins",
+            "def4567890123456789012345678901234567890",
+        );
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("nix flake update") || err.contains("resumable"));
@@ -1381,13 +1629,11 @@ mod tests {
 
     #[test]
     fn test_input_sync_message() {
-        let updates = vec![
-            InputUpdate {
-                input_name: "tools".to_string(),
-                dependency_node: "phenix-tools".to_string(),
-                target_rev: Some("abc123".to_string()),
-            },
-        ];
+        let updates = vec![InputUpdate {
+            input_name: "tools".to_string(),
+            dependency_node: "phenix-tools".to_string(),
+            target_rev: Some("abc123".to_string()),
+        }];
         let msg = input_sync_message("phenix-shell", &updates);
         assert!(msg.contains("phenix-tools"));
         assert!(msg.contains("abc123"));

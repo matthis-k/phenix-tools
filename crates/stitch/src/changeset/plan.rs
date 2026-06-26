@@ -7,11 +7,18 @@ pub fn execute(write: bool, json: bool) -> Result<(), String> {
     let cfg = config::find_and_load()?;
     let mut cs = match changeset::load_current()? {
         Some(cs) => cs,
-        None => return Err("No active changeset. Run `stitch changeset new \"<title>\"` first.".to_string()),
+        None => {
+            return Err(
+                "No active changeset. Run `stitch changeset new \"<title>\"` first.".to_string(),
+            )
+        }
     };
 
     if cs.state != ChangesetState::Planned {
-        return Err(format!("Changeset is in state '{}', not 'planned'. Cannot plan.", cs.state));
+        return Err(format!(
+            "Changeset is in state '{}', not 'planned'. Cannot plan.",
+            cs.state
+        ));
     }
 
     // Build plans from dirty repos
@@ -39,8 +46,7 @@ pub fn execute(write: bool, json: bool) -> Result<(), String> {
     }
 
     if json {
-        let output = serde_json::to_string_pretty(&cs)
-            .map_err(|e| format!("JSON: {}", e))?;
+        let output = serde_json::to_string_pretty(&cs).map_err(|e| format!("JSON: {}", e))?;
         println!("{}", output);
     } else {
         println!("Changeset: {} ({})", cs.id, cs.title);

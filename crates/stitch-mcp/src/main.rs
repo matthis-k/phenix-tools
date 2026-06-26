@@ -11,14 +11,12 @@ use phenix_mcp_core::runner::CommandRunner;
 use phenix_mcp_core::safety::SafetyPolicy;
 
 fn main() {
-    let audit_dir = PathBuf::from(
-        std::env::var("HOME").unwrap_or_else(|_| ".".to_string()),
-    )
-    .join(".local")
-    .join("share")
-    .join("phenix")
-    .join("audit")
-    .join("stitch-mcp");
+    let audit_dir = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
+        .join(".local")
+        .join("share")
+        .join("phenix")
+        .join("audit")
+        .join("stitch-mcp");
 
     let cwd = std::env::current_dir().unwrap_or_default();
     let roots = vec![McpRoot::new(cwd.clone(), false)];

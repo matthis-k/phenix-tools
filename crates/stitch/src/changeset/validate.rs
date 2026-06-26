@@ -7,7 +7,11 @@ pub fn execute(json: bool) -> Result<(), String> {
     let cfg = config::find_and_load()?;
     let mut cs = match changeset::load_current()? {
         Some(cs) => cs,
-        None => return Err("No active changeset. Run `stitch changeset new \"<title>\"` first.".to_string()),
+        None => {
+            return Err(
+                "No active changeset. Run `stitch changeset new \"<title>\"` first.".to_string(),
+            )
+        }
     };
 
     let errors = validate::validate_changeset(&cfg, &cs)?;

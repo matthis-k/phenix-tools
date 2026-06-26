@@ -15,7 +15,10 @@ pub enum Phase {
 
 impl Phase {
     pub fn is_mutating(self) -> bool {
-        matches!(self, Phase::Fix | Phase::Generate | Phase::Setup | Phase::Cleanup)
+        matches!(
+            self,
+            Phase::Fix | Phase::Generate | Phase::Setup | Phase::Cleanup
+        )
     }
 }
 
@@ -119,10 +122,16 @@ pub enum WorkdirPolicy {
 }
 
 impl WorkdirPolicy {
-    pub fn resolve(&self, config_dir: &std::path::Path, fallback: &std::path::Path) -> std::path::PathBuf {
+    pub fn resolve(
+        &self,
+        config_dir: &std::path::Path,
+        fallback: &std::path::Path,
+    ) -> std::path::PathBuf {
         match self {
             WorkdirPolicy::ConfigDir => config_dir.to_path_buf(),
-            WorkdirPolicy::ProgramCwd => std::env::current_dir().unwrap_or_else(|_| fallback.to_path_buf()),
+            WorkdirPolicy::ProgramCwd => {
+                std::env::current_dir().unwrap_or_else(|_| fallback.to_path_buf())
+            }
             WorkdirPolicy::Relative(suffix) => config_dir.join(suffix),
         }
     }
@@ -173,13 +182,9 @@ pub enum TaskKind {
         expect: Option<ExpectConfig>,
     },
     #[serde(rename = "filesExist")]
-    FilesExist {
-        paths: Vec<String>,
-    },
+    FilesExist { paths: Vec<String> },
     #[serde(rename = "filesAbsent")]
-    FilesAbsent {
-        paths: Vec<String>,
-    },
+    FilesAbsent { paths: Vec<String> },
     #[serde(rename = "forbidText")]
     ForbidText {
         paths: Vec<String>,

@@ -6,7 +6,10 @@ pub fn execute(repo: &str, message: &str) -> Result<(), String> {
         None => return Err("No active changeset.".to_string()),
     };
 
-    let rp = cs.repos.iter_mut().find(|r| r.name == repo)
+    let rp = cs
+        .repos
+        .iter_mut()
+        .find(|r| r.name == repo)
         .ok_or_else(|| format!("Repo '{}' not found in changeset", repo))?;
 
     rp.message = Some(message.to_string());
