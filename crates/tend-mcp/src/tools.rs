@@ -94,22 +94,28 @@ impl McpTool for TendPlanTool {
     fn metadata(&self) -> ToolMetadata { tool_meta(MutationLevel::ReadOnly) }
     fn input_schema(&self) -> Value {
         json!({
-            "root": { "type": "string" },
+            "root": { "type": "string", "description": "Root directory" },
+            "phase": { "type": "string", "enum": ["verify", "fix", "generate", "setup", "cleanup"] },
             "files": { "type": "array", "items": { "type": "string" } },
             "groups": { "type": "array", "items": { "type": "string" } },
             "targets": { "type": "array", "items": { "type": "string" } },
-            "mode": { "type": "string", "enum": ["changed", "staged", "all", "selected"] },
+            "mode": { "type": "string", "enum": ["changed", "staged", "all", "force", "selected"] },
             "base": { "type": "string" },
             "json": { "type": "boolean" }
         })
     }
     fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolFailure> {
         let audit_id = ctx.audit.generate_id();
-        let root = std::env::current_dir().unwrap_or_default();
-        let mode = input.get("mode").and_then(|v| v.as_str()).unwrap_or("changed");
+        let root = input.get("root").and_then(|v| v.as_str()).map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        let mode_str = input.get("mode").and_then(|v| v.as_str()).unwrap_or("changed");
+        let phase_str = input.get("phase").and_then(|v| v.as_str()).unwrap_or("verify");
+
+        let mode = RunMode::from_str(mode_str).unwrap_or(RunMode::Changed);
+        let phase = Phase::from_str(phase_str).unwrap_or(Phase::Verify);
 
         let changed_files = match mode {
-            "changed" | "staged" => Some(get_changed_files(&root)),
+            RunMode::Changed | RunMode::Staged => Some(get_changed_files(&root)),
             _ => None,
         };
 
@@ -119,57 +125,28 @@ impl McpTool for TendPlanTool {
             .unwrap_or_default();
 
         let files = if !explicit_files.is_empty() { Some(explicit_files) } else { changed_files };
-        let file_slice = files.as_deref();
 
         let pairs = match walk_tend_configs(&root) {
             Ok(p) => p,
             Err(e) => return Err(mk_err(ErrorKind::NotFound, &format!("Discovery: {}", e), &audit_id)),
         };
 
-        let checks: Vec<Value> = pairs.iter().flat_map(|(_, node)| {
-            node.tasks.iter().filter_map(|task| {
-                let should_run = match mode {
-                    "all" | "force" => true,
-                    _ => {
-                        if let Some(ref when) = task.config.when {
-                            if let Some(ref changed) = when.changed {
-                                if let Some(cf) = file_slice {
-                                    tend::planner::task_matches_paths(&changed.paths, cf)
-                                } else {
-                                    true
-                                }
-                            } else { true }
-                        } else { true }
-                    }
-                };
-                if !should_run { return None; }
+        let nodes: Vec<_> = pairs.into_iter().map(|(_, r)| r).collect();
 
-                let matched_files: Vec<String> = match (mode, file_slice) {
-                    ("changed" | "staged", Some(cf)) => {
-                        if let Some(ref when) = task.config.when {
-                            if let Some(ref changed) = when.changed {
-                                cf.iter().filter(|f| tend::planner::task_matches_paths(&changed.paths, &[(*f).clone()])).cloned().collect()
-                            } else { vec![] }
-                        } else { vec![] }
-                    },
-                    _ => vec![],
-                };
+        let plan = match tend::planner::build_plan(&nodes, phase, mode, files.as_deref()) {
+            Ok(p) => p,
+            Err(e) => return Err(mk_err(ErrorKind::Internal, &format!("Plan: {}", e), &audit_id)),
+        };
 
-                let reason = if !matched_files.is_empty() {
-                    format!("matched {} pattern(s)", matched_files.len())
-                } else {
-                    "selected explicitly".to_string()
-                };
-
-                Some(json!({
-                    "id": task.config.id,
-                    "group": node.id,
-                    "kind": task.config.kind,
-                    "phase": task.config.phase,
-                    "reason": reason,
-                    "files": matched_files,
-                    "depends_on": []
-                }))
+        let checks: Vec<Value> = plan.items.iter().map(|item| {
+            json!({
+                "id": item.task_id,
+                "group": item.chain_id.split('.').next().unwrap_or(&item.task_id),
+                "kind": item.step.kind.description(),
+                "phase": item.phase,
+                "reason": "planned",
+                "files": [],
+                "depends_on": []
             })
         }).collect();
 
@@ -190,10 +167,12 @@ impl McpTool for TendRunTool {
     fn metadata(&self) -> ToolMetadata { tool_meta(MutationLevel::WritesWorktree) }
     fn input_schema(&self) -> Value {
         json!({
+            "root": { "type": "string", "description": "Root directory" },
             "files": { "type": "array", "items": { "type": "string" } },
             "groups": { "type": "array", "items": { "type": "string" } },
             "targets": { "type": "array", "items": { "type": "string" } },
-            "mode": { "type": "string", "enum": ["changed", "staged", "all", "selected"] },
+            "phase": { "type": "string", "enum": ["verify", "fix", "generate", "setup", "cleanup"] },
+            "mode": { "type": "string", "enum": ["changed", "staged", "all", "force", "selected"] },
             "fail_fast": { "type": "boolean" },
             "timeout_seconds": { "type": "number" },
             "output": { "type": "string", "enum": ["summary", "full", "failed_only"] }
@@ -201,9 +180,13 @@ impl McpTool for TendRunTool {
     }
     fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolFailure> {
         let audit_id = ctx.audit.generate_id();
-        let root = std::env::current_dir().unwrap_or_default();
+        let root = input.get("root").and_then(|v| v.as_str()).map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         let mode = input.get("mode").and_then(|v| v.as_str()).unwrap_or("changed");
+        let phase_str = input.get("phase").and_then(|v| v.as_str()).unwrap_or("verify");
         let fail_fast = input.get("fail_fast").and_then(|v| v.as_bool()).unwrap_or(false);
+
+        let phase = Phase::from_str(phase_str).unwrap_or(Phase::Verify);
 
         let pairs = match walk_tend_configs(&root) {
             Ok(p) => p,
@@ -217,7 +200,7 @@ impl McpTool for TendRunTool {
 
         let nodes: Vec<_> = pairs.into_iter().map(|(_, r)| r).collect();
         let run_mode = RunMode::from_str(mode).unwrap_or(RunMode::Changed);
-        let plan = match tend::planner::build_plan(&nodes, Phase::Verify, if mode == "all" { RunMode::Force } else { run_mode }, changed_files.as_deref()) {
+        let plan = match tend::planner::build_plan(&nodes, phase, run_mode, changed_files.as_deref()) {
             Ok(p) => p,
             Err(e) => return Err(mk_err(ErrorKind::Internal, &format!("Plan: {}", e), &audit_id)),
         };
@@ -235,17 +218,19 @@ impl McpTool for TendRunTool {
         let mut failures: Vec<Value> = Vec::new();
 
         for r in &results {
-            if r.skipped { skipped += 1; }
-            else if r.passed { passed += 1; }
-            else {
-                failed += 1;
-                failures.push(json!({
-                    "check_id": r.task_id, "kind": r.kind,
-                    "reason": r.reason,
-                    "stdout_tail": r.stdout.chars().take(500).collect::<String>(),
-                    "stderr_tail": r.stderr.chars().take(500).collect::<String>()
-                }));
-                if fail_fast { break; }
+            match &r.outcome {
+                tend::checks::CheckOutcome::Skipped { .. } => { skipped += 1; }
+                tend::checks::CheckOutcome::Passed => { passed += 1; }
+                tend::checks::CheckOutcome::Failed { reason } | tend::checks::CheckOutcome::Errored { reason } => {
+                    failed += 1;
+                    failures.push(json!({
+                        "check_id": r.task_id, "kind": r.kind,
+                        "reason": reason,
+                        "stdout_tail": r.stdout.chars().take(500).collect::<String>(),
+                        "stderr_tail": r.stderr.chars().take(500).collect::<String>()
+                    }));
+                    if fail_fast { break; }
+                }
             }
         }
 
@@ -266,6 +251,7 @@ impl McpTool for TendExplainTool {
     fn metadata(&self) -> ToolMetadata { tool_meta(MutationLevel::ReadOnly) }
     fn input_schema(&self) -> Value {
         json!({
+            "root": { "type": "string", "description": "Root directory" },
             "run_id": { "type": "string", "description": "Run ID from tend.run" },
             "check_id": { "type": "string", "description": "Optional check ID to filter" },
             "include_repro_command": { "type": "boolean" }
@@ -274,7 +260,8 @@ impl McpTool for TendExplainTool {
     fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolFailure> {
         let audit_id = ctx.audit.generate_id();
         let check_id = input.get("check_id").and_then(|v| v.as_str());
-        let root = std::env::current_dir().unwrap_or_default();
+        let root = input.get("root").and_then(|v| v.as_str()).map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
         let pairs = match walk_tend_configs(&root) {
             Ok(p) => p,
@@ -301,11 +288,15 @@ impl McpTool for TendExplainTool {
             &items.iter().map(|i| (*i).clone()).collect::<Vec<_>>(), &root,
         );
 
-        let explanations: Vec<Value> = exec_results.iter().filter(|r| !r.passed && !r.skipped).map(|r| {
+        let explanations: Vec<Value> = exec_results.iter().filter(|r| r.outcome.is_failure()).map(|r| {
+            let reason = match &r.outcome {
+                tend::checks::CheckOutcome::Failed { reason } | tend::checks::CheckOutcome::Errored { reason } => reason.clone(),
+                _ => String::new(),
+            };
             json!({
                 "check_id": r.task_id,
                 "failure_kind": "exit_code",
-                "explanation": r.reason,
+                "explanation": reason,
                 "relevant_output": r.stderr.chars().take(1000).collect::<String>(),
                 "likely_causes": ["Check command failed with non-zero exit code"]
             })

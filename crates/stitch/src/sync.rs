@@ -73,6 +73,8 @@ pub struct TransactionJournal {
     pub root: NodeId,
     pub phase: JournalPhase,
     pub nodes: BTreeMap<NodeId, NodeJournalEntry>,
+    #[serde(default)]
+    pub actions: Vec<ActionJournalEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -103,6 +105,24 @@ pub struct NodeJournalEntry {
     pub path: String,
     pub commit_sha: Option<String>,
     pub pushed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ActionState {
+    Pending,
+    Done,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActionJournalEntry {
+    pub action_index: usize,
+    pub node: NodeId,
+    pub state: ActionState,
+    pub commit_sha: Option<String>,
+    pub pushed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 fn generate_transaction_id() -> String {
@@ -389,9 +409,10 @@ fn execute_plan(
         root: plan.root.clone(),
         phase: JournalPhase::Planned,
         nodes: BTreeMap::new(),
+        actions: Vec::new(),
     };
 
-    for action in &plan.actions {
+    for (i, action) in plan.actions.iter().enumerate() {
         let node_id = action.node();
         if !journal.nodes.contains_key(node_id) {
             let node = graph.get_node(node_id).ok_or_else(|| format!("Node '{}' not found", node_id))?;
@@ -404,6 +425,14 @@ fn execute_plan(
                 },
             );
         }
+        journal.actions.push(ActionJournalEntry {
+            action_index: i,
+            node: node_id.clone(),
+            state: ActionState::Pending,
+            commit_sha: None,
+            pushed: false,
+            error: None,
+        });
     }
 
     write_journal(&journal, cfg)?;
@@ -419,7 +448,23 @@ fn execute_plan(
     let mut commit_shas: BTreeMap<NodeId, String> = BTreeMap::new();
     let mut push_results: BTreeMap<String, Result<(), String>> = BTreeMap::new();
 
-    for action in &plan.actions {
+    for (action_idx, action) in plan.actions.iter().enumerate() {
+        let mark_done = |journal: &mut TransactionJournal, sha: Option<String>, pushed: bool| {
+            if let Some(entry) = journal.actions.get_mut(action_idx) {
+                entry.state = ActionState::Done;
+                entry.commit_sha = sha;
+                entry.pushed = pushed;
+            }
+        };
+
+        let mark_failed = |journal: &mut TransactionJournal, err: String| {
+            if let Some(entry) = journal.actions.get_mut(action_idx) {
+                entry.state = ActionState::Failed;
+                entry.error = Some(err);
+            }
+            journal.phase = JournalPhase::Failed;
+        };
+
         match action {
             Action::Commit { node: node_id, message } => {
                 let node = match graph.get_node(node_id) {
@@ -444,8 +489,9 @@ fn execute_plan(
                 commit_shas.insert(node_id.clone(), sha.clone());
 
                 if let Some(entry) = journal.nodes.get_mut(node_id) {
-                    entry.commit_sha = Some(sha);
+                    entry.commit_sha = Some(sha.clone());
                 }
+                mark_done(&mut journal, Some(sha), false);
                 write_journal(&journal, cfg)?;
             }
             Action::UpdateInputs { node: node_id, updates, message } => {
@@ -467,6 +513,8 @@ fn execute_plan(
                     .collect();
 
                 if updated_deps.is_empty() {
+                    mark_done(&mut journal, None, false);
+                    write_journal(&journal, cfg)?;
                     continue;
                 }
 
@@ -489,8 +537,12 @@ fn execute_plan(
                     commit_shas.insert(node_id.clone(), sha.clone());
 
                     if let Some(entry) = journal.nodes.get_mut(node_id) {
-                        entry.commit_sha = Some(sha);
+                        entry.commit_sha = Some(sha.clone());
                     }
+                    mark_done(&mut journal, Some(sha), false);
+                    write_journal(&journal, cfg)?;
+                } else {
+                    mark_done(&mut journal, None, false);
                     write_journal(&journal, cfg)?;
                 }
             }
@@ -504,17 +556,16 @@ fn execute_plan(
                     None => continue,
                 };
 
-                if !node.path.join(".git").exists() {
-                    continue;
-                }
-                let porcelain = git::git_porcelain(&node.path)?;
-                let has_tracked_changes = porcelain.lines().any(|line| {
-                    if line.len() < 2 { return false; }
-                    let idx = line.as_bytes()[0] as char;
-                    // Only count staged changes (idx != space/?/!) as real tracked changes.
-                    idx != ' ' && idx != '?' && idx != '!'
-                });
-                if has_tracked_changes {
+                let repo = match git::GitRepo::open(&node.path) {
+                    Ok(r) => r,
+                    Err(_) => {
+                        mark_done(&mut journal, None, false);
+                        write_journal(&journal, cfg)?;
+                        continue;
+                    }
+                };
+                let status = repo.status()?;
+                if status.staged_count() > 0 {
                     return Err(format!("Repo '{}' has uncommitted tracked changes after sync commit", node.name));
                 }
 
@@ -545,9 +596,14 @@ fn execute_plan(
                         ));
                     }
                 }
+
+                mark_done(&mut journal, None, false);
+                write_journal(&journal, cfg)?;
             }
             Action::Push { node: node_id } => {
                 if no_push {
+                    mark_done(&mut journal, None, false);
+                    write_journal(&journal, cfg)?;
                     continue;
                 }
 
@@ -558,8 +614,8 @@ fn execute_plan(
 
                 let result = git_push(&node.path, &node.branch);
                 if let Err(ref e) = result {
+                    mark_failed(&mut journal, e.clone());
                     push_results.insert(node.name.clone(), Err(e.clone()));
-                    journal.phase = JournalPhase::Failed;
                     write_journal(&journal, cfg)?;
                     let pushed_nodes: Vec<String> = push_results
                         .iter()
@@ -581,6 +637,7 @@ fn execute_plan(
                 if let Some(entry) = journal.nodes.get_mut(node_id) {
                     entry.pushed = true;
                 }
+                mark_done(&mut journal, None, true);
                 write_journal(&journal, cfg)?;
             }
         }
@@ -598,31 +655,9 @@ fn execute_plan(
 }
 
 fn collect_all_changed_files(repo: &Path) -> Result<Vec<String>, String> {
-    let mut files: Vec<String> = Vec::new();
-    if let Ok(diff) = git::git_diff_names(repo) {
-        for f in diff {
-            if !files.contains(&f) {
-                files.push(f);
-            }
-        }
-    }
-    if let Ok(staged) = git::git_diff_cached_names(repo) {
-        for f in staged {
-            if !files.contains(&f) {
-                files.push(f);
-            }
-        }
-    }
-    let porcelain = git::git_porcelain(repo)?;
-    for line in porcelain.lines() {
-        let line = line.trim();
-        if line.starts_with("?? ") {
-            let f = line[3..].trim().to_string();
-            if !files.contains(&f) {
-                files.push(f);
-            }
-        }
-    }
+    let git_repo = git::GitRepo::open(repo)?;
+    let status = git_repo.status()?;
+    let mut files: Vec<String> = status.all_files().into_iter().map(|s| s.to_string()).collect();
     files.sort();
     Ok(files)
 }
@@ -792,60 +827,216 @@ pub fn resume_sync(
 
     let plan = plan_sync(&graph, &statuses, cfg)?;
 
-    if journal.phase == JournalPhase::Pushing || journal.phase == JournalPhase::Committed || journal.phase == JournalPhase::Validated {
-        let mut push_results: BTreeMap<String, Result<(), String>> = BTreeMap::new();
-        let mut any_failed = false;
-        for action in &plan.actions {
-            let Action::Push { node: node_id } = action else { continue };
-            let entry = match journal.nodes.get(node_id) {
-                Some(e) => e,
-                None => continue,
-            };
-            if entry.pushed {
+    if journal.actions.is_empty() {
+        return Err(format!(
+            "Transaction '{}' has no per-action journal (pre-refactor format). Cannot resume.",
+            transaction_id
+        ));
+    }
+
+    let mut push_results: BTreeMap<String, Result<(), String>> = BTreeMap::new();
+    let mut commit_shas: BTreeMap<NodeId, String> = journal.nodes.iter()
+        .filter_map(|(id, e)| e.commit_sha.clone().map(|sha| (id.clone(), sha)))
+        .collect();
+    let mut any_failed = false;
+    let mut resume_journal = journal.clone();
+    resume_journal.phase = JournalPhase::Planned;
+
+    for (action_idx, action) in plan.actions.iter().enumerate() {
+        let journal_entry = resume_journal.actions.get(action_idx);
+
+        // Skip actions that are already Done
+        if let Some(entry) = journal_entry {
+            if entry.state == ActionState::Done {
+                if let Action::Push { .. } = action {
+                    if entry.pushed {
+                        push_results.insert(entry.node.clone(), Ok(()));
+                    }
+                }
+                continue;
+            }
+        }
+
+        match action {
+            Action::Commit { node: node_id, message: _ } => {
+                let node = match graph.get_node(node_id) {
+                    Some(n) => n,
+                    None => continue,
+                };
+
+                let files = collect_all_changed_files(&node.path)?;
+                if files.is_empty() {
+                    // Already clean, treat as done
+                    if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
+                        entry.state = ActionState::Done;
+                    }
+                    write_journal(&resume_journal, cfg)?;
+                    continue;
+                }
+
+                if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
+                    entry.state = ActionState::Pending;
+                }
+                write_journal(&resume_journal, cfg)?;
+
+                let msg = if let Some(sha) = commit_shas.get(node_id) {
+                    format!("chore(stitch): resume commit for {}\n\nPrevious: {}", node.name, sha)
+                } else {
+                    format!("chore(stitch): resume commit for {}", node.name)
+                };
+
+                git::git_add(&node.path, &files)?;
+                let trailed = crate::model::add_trailers(&msg, transaction_id, &cfg.workspace);
+                git::git_commit(&node.path, &trailed)?;
+                let sha = git::git_head(&node.path)?;
+                commit_shas.insert(node_id.clone(), sha.clone());
+
+                if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
+                    entry.state = ActionState::Done;
+                    entry.commit_sha = Some(sha.clone());
+                }
+                if let Some(entry) = resume_journal.nodes.get_mut(node_id) {
+                    entry.commit_sha = Some(sha);
+                }
+                write_journal(&resume_journal, cfg)?;
+            }
+            Action::UpdateInputs { node: node_id, .. } => {
+                let node = match graph.get_node(node_id) {
+                    Some(n) => n,
+                    None => continue,
+                };
+
+                if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
+                    entry.state = ActionState::Pending;
+                }
+                write_journal(&resume_journal, cfg)?;
+
+                let lock_path = node.path.join("flake.lock");
+                if lock_path.exists() {
+                    git::git_add(&node.path, &[lock_path.to_string_lossy().to_string()])?;
+                    let msg = format!("chore(inputs): resume sync for {}", node.name);
+                    let trailed = crate::model::add_trailers(&msg, transaction_id, &cfg.workspace);
+                    git::git_commit(&node.path, &trailed)?;
+                    let sha = git::git_head(&node.path)?;
+                    commit_shas.insert(node_id.clone(), sha.clone());
+
+                    if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
+                        entry.state = ActionState::Done;
+                        entry.commit_sha = Some(sha.clone());
+                    }
+                    if let Some(entry) = resume_journal.nodes.get_mut(node_id) {
+                        entry.commit_sha = Some(sha);
+                    }
+                    write_journal(&resume_journal, cfg)?;
+                } else {
+                    if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
+                        entry.state = ActionState::Done;
+                    }
+                    write_journal(&resume_journal, cfg)?;
+                }
+            }
+            Action::Validate { node: node_id } => {
+                // Re-run validation
+                let plan_node = match plan.node_plans.get(node_id) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let node = match graph.get_node(node_id) {
+                    Some(n) => n,
+                    None => continue,
+                };
+
+                for cmd_parts in &plan_node.validation_commands {
+                    if cmd_parts.is_empty() {
+                        continue;
+                    }
+                    let output = std::process::Command::new(&cmd_parts[0])
+                        .args(&cmd_parts[1..])
+                        .current_dir(&node.path)
+                        .output()
+                        .map_err(|e| format!("Validation command failed: {}", e))?;
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        return Err(format!(
+                            "Validation failed in '{}' during resume: {} {}",
+                            node.name,
+                            cmd_parts.join(" "),
+                            stderr.trim()
+                        ));
+                    }
+                }
+
+                if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
+                    entry.state = ActionState::Done;
+                }
+                write_journal(&resume_journal, cfg)?;
+            }
+            Action::Push { node: node_id } => {
+                if let Some(entry) = journal_entry {
+                    if entry.pushed {
+                        push_results.insert(entry.node.clone(), Ok(()));
+                        continue;
+                    }
+                }
+
+                if no_push {
+                    push_results.insert(node_id.clone(), Err("Skipped (--no-push)".to_string()));
+                    if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
+                        entry.state = ActionState::Done;
+                    }
+                    write_journal(&resume_journal, cfg)?;
+                    continue;
+                }
+
+                let node = match graph.get_node(node_id) {
+                    Some(n) => n,
+                    None => continue,
+                };
+
+                let result = git_push(&node.path, &node.branch);
+                if let Err(ref e) = result {
+                    push_results.insert(node_id.clone(), Err(e.clone()));
+                    any_failed = true;
+                    if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
+                        entry.state = ActionState::Failed;
+                        entry.error = Some(e.clone());
+                    }
+                    resume_journal.phase = JournalPhase::Failed;
+                    write_journal(&resume_journal, cfg)?;
+                    break;
+                }
+
                 push_results.insert(node_id.clone(), Ok(()));
-                continue;
+                if let Some(entry) = resume_journal.actions.get_mut(action_idx) {
+                    entry.state = ActionState::Done;
+                    entry.pushed = true;
+                }
+                if let Some(entry) = resume_journal.nodes.get_mut(node_id) {
+                    entry.pushed = true;
+                }
+                write_journal(&resume_journal, cfg)?;
             }
-
-            if no_push {
-                push_results.insert(node_id.clone(), Err("Skipped (--no-push)".to_string()));
-                continue;
-            }
-
-            let node = match graph.get_node(node_id) {
-                Some(n) => n,
-                None => continue,
-            };
-            let result = git_push(&node.path, &node.branch);
-            if let Err(ref e) = result {
-                push_results.insert(node_id.clone(), Err(e.clone()));
-                any_failed = true;
-                break;
-            }
-            push_results.insert(node_id.clone(), Ok(()));
         }
+    }
 
-        if any_failed {
-            return Ok(ActionResult {
-                transaction_id: transaction_id.to_string(),
-                created_commits: journal.nodes.iter().filter_map(|(id, e)| {
-                    e.commit_sha.clone().map(|sha| (id.clone(), sha))
-                }).collect(),
-                push_results,
-                phase: JournalPhase::Failed,
-            });
-        }
-
+    if any_failed {
         return Ok(ActionResult {
             transaction_id: transaction_id.to_string(),
-            created_commits: journal.nodes.iter().filter_map(|(id, e)| {
-                e.commit_sha.clone().map(|sha| (id.clone(), sha))
-            }).collect(),
+            created_commits: commit_shas,
             push_results,
-            phase: JournalPhase::Completed,
+            phase: JournalPhase::Failed,
         });
     }
 
-    Err(format!("Transaction '{}' is in phase '{}' and cannot be resumed", transaction_id, journal.phase))
+    resume_journal.phase = JournalPhase::Completed;
+    write_journal(&resume_journal, cfg)?;
+
+    Ok(ActionResult {
+        transaction_id: transaction_id.to_string(),
+        created_commits: commit_shas,
+        push_results,
+        phase: JournalPhase::Completed,
+    })
 }
 
 fn journal_dir(cfg: &WorkspaceConfig) -> Result<std::path::PathBuf, String> {

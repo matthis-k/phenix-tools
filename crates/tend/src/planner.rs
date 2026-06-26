@@ -27,9 +27,8 @@ pub struct PlanItem {
     pub task_id: String,
     pub chain_id: String,
     pub description: String,
-    pub kind: String,
     pub phase: Phase,
-    pub step: Option<Step>,
+    pub step: Step,
     pub item_type: PlanItemType,
     pub context: ContextConfig,
 }
@@ -79,9 +78,8 @@ pub fn build_plan(
                 task_id: format!("{}.before", node.id),
                 chain_id: node.id.clone(),
                 description,
-                kind: step.kind.clone(),
                 phase,
-                step: Some(step),
+                step: step,
                 item_type: PlanItemType::TaskBefore,
                 context: node.context.clone(),
             });
@@ -121,14 +119,14 @@ pub fn build_plan(
                     task_id: format!("{}.before", task.config.id),
                     chain_id: task_chain_id.clone(),
                     description: step.description.clone(),
-                    kind: step.kind.clone(),
                     phase,
-                    step: Some(step),
+                    step: step,
                     item_type: PlanItemType::TaskBefore,
                     context: node.context.clone(),
                 });
             }
 
+            let task_step_kind = task_step_kind_from_config(&task.config);
             items.push(PlanItem {
                 node_path: node.node_path.clone(),
                 config_path: node.config_path.clone(),
@@ -139,21 +137,16 @@ pub fn build_plan(
                     .description
                     .clone()
                     .unwrap_or_default(),
-                kind: task.config.kind.clone(),
                 phase,
-                step: Some(Step {
-                    kind: task.config.kind.clone(),
-                    command: task.config.command.clone().unwrap_or_default(),
-                    paths: task.config.paths.clone().unwrap_or_default(),
-                    patterns: task.config.patterns.clone().unwrap_or_default(),
+                step: Step {
+                    kind: task_step_kind,
                     always: task.config.always.unwrap_or(false),
                     description: task
                         .config
                         .description
                         .clone()
                         .unwrap_or_default(),
-                    expect: task.config.expect.clone(),
-                }),
+                },
                 item_type: PlanItemType::TaskAction,
                 context: node.context.clone(),
             });
@@ -166,9 +159,8 @@ pub fn build_plan(
                     task_id: format!("{}.after", task.config.id),
                     chain_id: task_chain_id.clone(),
                     description: step.description.clone(),
-                    kind: step.kind.clone(),
                     phase,
-                    step: Some(step),
+                    step: step,
                     item_type: PlanItemType::TaskAfter,
                     context: node.context.clone(),
                 });
@@ -193,9 +185,8 @@ pub fn build_plan(
                 task_id: format!("{}.after", node.id),
                 chain_id: node.id.clone(),
                 description,
-                kind: step.kind.clone(),
-                    phase,
-                    step: Some(step),
+                phase,
+                step: step,
                 item_type: PlanItemType::TaskAfter,
                 context: node.context.clone(),
             });
@@ -264,7 +255,36 @@ fn task_applies(task: &ResolvedTask, mode: RunMode, changed_files: Option<&[Stri
 }
 
 fn should_run_step(step: &Step) -> bool {
-    !step.command.is_empty() || !step.paths.is_empty() || !step.patterns.is_empty()
+    use crate::model::TaskKind;
+    match &step.kind {
+        TaskKind::Command { command, .. } => !command.is_empty(),
+        TaskKind::FilesExist { paths } | TaskKind::FilesAbsent { paths } => !paths.is_empty(),
+        TaskKind::ForbidText { paths, .. } | TaskKind::RequireText { paths, .. } => !paths.is_empty(),
+    }
+}
+
+fn task_step_kind_from_config(cfg: &TaskConfig) -> crate::model::TaskKind {
+    use crate::model::TaskKind;
+    match cfg.kind.as_str() {
+        "filesExist" => TaskKind::FilesExist {
+            paths: cfg.paths.clone().unwrap_or_default(),
+        },
+        "filesAbsent" => TaskKind::FilesAbsent {
+            paths: cfg.paths.clone().unwrap_or_default(),
+        },
+        "forbidText" => TaskKind::ForbidText {
+            paths: cfg.paths.clone().unwrap_or_default(),
+            patterns: cfg.patterns.clone().unwrap_or_default(),
+        },
+        "requireText" => TaskKind::RequireText {
+            paths: cfg.paths.clone().unwrap_or_default(),
+            patterns: cfg.patterns.clone().unwrap_or_default(),
+        },
+        _ => TaskKind::Command {
+            command: cfg.command.clone().unwrap_or_default(),
+            expect: cfg.expect.clone(),
+        },
+    }
 }
 
 pub fn task_matches_paths(patterns: &[String], changed_files: &[String]) -> bool {

@@ -2,14 +2,9 @@ use std::path::Path;
 
 use globset::{GlobBuilder, GlobSetBuilder};
 
-use crate::model::Step;
-
 use super::CheckResult;
 
-pub fn run_forbid(step: &Step, workdir: &Path) -> CheckResult {
-    let patterns = &step.patterns;
-    let path_globs = &step.paths;
-
+pub fn run_forbid(path_globs: &[String], patterns: &[String], workdir: &Path) -> CheckResult {
     if path_globs.is_empty() || patterns.is_empty() {
         return CheckResult::skip();
     }
@@ -78,10 +73,7 @@ pub fn run_forbid(step: &Step, workdir: &Path) -> CheckResult {
     }
 }
 
-pub fn run_require(step: &Step, workdir: &Path) -> CheckResult {
-    let patterns = &step.patterns;
-    let path_globs = &step.paths;
-
+pub fn run_require(path_globs: &[String], patterns: &[String], workdir: &Path) -> CheckResult {
     if path_globs.is_empty() || patterns.is_empty() {
         return CheckResult::skip();
     }
@@ -99,7 +91,7 @@ pub fn run_require(step: &Step, workdir: &Path) -> CheckResult {
         Err(e) => return CheckResult::error(format!("glob build: {e}")),
     };
 
-    let mut missing = patterns.clone();
+    let mut missing = patterns.to_vec();
 
     let walker = walkdir::WalkDir::new(workdir).into_iter();
     for entry in walker {
@@ -147,23 +139,10 @@ pub fn run_require(step: &Step, workdir: &Path) -> CheckResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Step;
     use std::fs;
 
     fn test_dir() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
-    }
-
-    fn make_step(kind: &str, paths: Vec<String>, patterns: Vec<String>) -> Step {
-        Step {
-            kind: kind.to_string(),
-            command: vec![],
-            paths,
-            patterns,
-            always: false,
-            description: String::new(),
-            expect: None,
-        }
     }
 
     #[test]
@@ -171,15 +150,18 @@ mod tests {
         let dir = test_dir();
         fs::write(dir.path().join("test.md"), b"contains id=\"secret\" here").unwrap();
 
-        let step = make_step(
-            "forbidText",
-            vec!["*.md".to_string()],
-            vec!["id=\"".to_string()],
+        let result = run_forbid(
+            &["*.md".to_string()],
+            &["id=\"".to_string()],
+            dir.path(),
         );
-
-        let result = run_forbid(&step, dir.path());
         assert!(result.outcome.is_failure());
-        match &result.outcome { crate::checks::CheckOutcome::Failed { reason } => assert!(reason.contains("forbidden pattern")), _ => panic!("expected failure") }
+        match &result.outcome {
+            crate::checks::CheckOutcome::Failed { reason } => {
+                assert!(reason.contains("forbidden pattern"))
+            }
+            _ => panic!("expected failure"),
+        }
     }
 
     #[test]
@@ -187,13 +169,11 @@ mod tests {
         let dir = test_dir();
         fs::write(dir.path().join("test.md"), b"clean file no issues").unwrap();
 
-        let step = make_step(
-            "forbidText",
-            vec!["*.md".to_string()],
-            vec!["id=\"".to_string()],
+        let result = run_forbid(
+            &["*.md".to_string()],
+            &["id=\"".to_string()],
+            dir.path(),
         );
-
-        let result = run_forbid(&step, dir.path());
         assert!(result.outcome.is_pass());
     }
 
@@ -206,13 +186,11 @@ mod tests {
         )
         .unwrap();
 
-        let step = make_step(
-            "requireText",
-            vec!["*.md".to_string()],
-            vec!["intended workflow".to_string()],
+        let result = run_require(
+            &["*.md".to_string()],
+            &["intended workflow".to_string()],
+            dir.path(),
         );
-
-        let result = run_require(&step, dir.path());
         assert!(result.outcome.is_pass());
     }
 
@@ -221,13 +199,11 @@ mod tests {
         let dir = test_dir();
         fs::write(dir.path().join("readme.md"), b"other content").unwrap();
 
-        let step = make_step(
-            "requireText",
-            vec!["*.md".to_string()],
-            vec!["required phrase".to_string()],
+        let result = run_require(
+            &["*.md".to_string()],
+            &["required phrase".to_string()],
+            dir.path(),
         );
-
-        let result = run_require(&step, dir.path());
         assert!(result.outcome.is_failure());
     }
 }

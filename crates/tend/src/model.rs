@@ -150,6 +150,44 @@ pub struct ExpectConfig {
 }
 
 #[derive(Debug, Clone)]
+pub enum TaskKind {
+    Command {
+        command: Vec<String>,
+        expect: Option<ExpectConfig>,
+    },
+    FilesExist {
+        paths: Vec<String>,
+    },
+    FilesAbsent {
+        paths: Vec<String>,
+    },
+    ForbidText {
+        paths: Vec<String>,
+        patterns: Vec<String>,
+    },
+    RequireText {
+        paths: Vec<String>,
+        patterns: Vec<String>,
+    },
+}
+
+impl TaskKind {
+    pub fn description(&self) -> &str {
+        match self {
+            TaskKind::Command { .. } => "command",
+            TaskKind::FilesExist { .. } => "filesExist",
+            TaskKind::FilesAbsent { .. } => "filesAbsent",
+            TaskKind::ForbidText { .. } => "forbidText",
+            TaskKind::RequireText { .. } => "requireText",
+        }
+    }
+
+    pub fn is_valid_kind(s: &str) -> bool {
+        matches!(s, "command" | "filesExist" | "filesAbsent" | "forbidText" | "requireText")
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ResolvedNode {
     pub config_path: PathBuf,
     pub node_path: PathBuf,
@@ -170,35 +208,47 @@ pub struct ResolvedTask {
 }
 
 #[derive(Debug, Clone)]
+pub struct PlanRequest {
+    pub phase: Phase,
+    pub mode: RunMode,
+    pub group: Option<String>,
+    pub target: Option<String>,
+    pub files: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Step {
-    pub kind: String,
-    pub command: Vec<String>,
-    pub paths: Vec<String>,
-    pub patterns: Vec<String>,
+    pub kind: TaskKind,
     pub always: bool,
     pub description: String,
-    pub expect: Option<ExpectConfig>,
 }
 
 impl From<&StepConfig> for Step {
     fn from(s: &StepConfig) -> Self {
+        let kind = match s.kind.as_deref() {
+            Some("filesExist") => TaskKind::FilesExist {
+                paths: s.paths.clone().unwrap_or_default(),
+            },
+            Some("filesAbsent") => TaskKind::FilesAbsent {
+                paths: s.paths.clone().unwrap_or_default(),
+            },
+            Some("forbidText") => TaskKind::ForbidText {
+                paths: s.paths.clone().unwrap_or_default(),
+                patterns: s.patterns.clone().unwrap_or_default(),
+            },
+            Some("requireText") => TaskKind::RequireText {
+                paths: s.paths.clone().unwrap_or_default(),
+                patterns: s.patterns.clone().unwrap_or_default(),
+            },
+            _ => TaskKind::Command {
+                command: s.command.clone().unwrap_or_default(),
+                expect: None,
+            },
+        };
         Self {
-            kind: s.kind.clone().unwrap_or_else(|| "command".to_string()),
-            command: s.command.clone().unwrap_or_default(),
-            paths: s.paths.clone().unwrap_or_default(),
-            patterns: s.patterns.clone().unwrap_or_default(),
+            kind,
             always: s.always.unwrap_or(false),
             description: s.description.clone().unwrap_or_default(),
-            expect: None,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum PlanItem {
-    TaskAction {
-        node_path: PathBuf,
-        config_path: PathBuf,
-        task: ResolvedTask,
-    },
 }

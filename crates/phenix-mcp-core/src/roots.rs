@@ -21,11 +21,7 @@ impl McpRoot {
     }
 
     pub fn contains(&self, target: &Path) -> bool {
-        if let Ok(canonical) = dunce::canonicalize(target) {
-            canonical.starts_with(&self.path)
-        } else {
-            target.starts_with(&self.path)
-        }
+        is_path_inside_root(target, self)
     }
 }
 
@@ -77,13 +73,48 @@ impl RootValidator {
 }
 
 mod dunce {
-    use std::path::{Path, PathBuf};
+    use std::path::{Path, PathBuf, Component};
 
     pub fn canonicalize(path: &Path) -> Result<PathBuf, std::io::Error> {
         if path.exists() {
             path.canonicalize()
         } else {
-            Ok(path.to_path_buf())
+            Ok(normalize(path))
         }
+    }
+
+    /// Lexically normalize a path, resolving `..` and `.` components.
+    /// Does not touch the filesystem.
+    pub fn normalize(path: &Path) -> PathBuf {
+        let mut components: Vec<Component> = Vec::new();
+        for component in path.components() {
+            match component {
+                Component::ParentDir => {
+                    if components.last().map_or(false, |c| matches!(c, Component::Normal(_))) {
+                        components.pop();
+                    } else if components.last().map_or(true, |c| !matches!(c, Component::RootDir)) {
+                        components.push(component);
+                    }
+                }
+                Component::CurDir => {}
+                other => components.push(other),
+            }
+        }
+        components.iter().collect()
+    }
+}
+
+/// Lexically check if `path` starts with `base`, normalizing both.
+fn path_starts_with(path: &Path, base: &Path) -> bool {
+    let normal_path = dunce::normalize(path);
+    let normal_base = dunce::normalize(base);
+    normal_path.starts_with(&normal_base)
+}
+
+pub fn is_path_inside_root(path: &Path, root: &McpRoot) -> bool {
+    if let Ok(canonical) = dunce::canonicalize(path) {
+        canonical.starts_with(&root.path)
+    } else {
+        path_starts_with(path, &root.path)
     }
 }

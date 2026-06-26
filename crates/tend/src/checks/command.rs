@@ -2,17 +2,22 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
-use crate::model::Step;
+use crate::model::ExpectConfig;
 
 use super::CheckResult;
 
-pub fn run(step: &Step, workdir: &Path, env: Option<&HashMap<String, String>>) -> CheckResult {
-    if step.command.is_empty() {
+pub fn run_command(
+    command: &[String],
+    expect: Option<&ExpectConfig>,
+    workdir: &Path,
+    env: Option<&HashMap<String, String>>,
+) -> CheckResult {
+    if command.is_empty() {
         return CheckResult::skip();
     }
 
-    let program = &step.command[0];
-    let args: Vec<&str> = step.command[1..].iter().map(|s| s.as_str()).collect();
+    let program = &command[0];
+    let args: Vec<&str> = command[1..].iter().map(|s| s.as_str()).collect();
 
     let mut cmd = Command::new(program);
     cmd.args(&args).current_dir(workdir);
@@ -32,13 +37,15 @@ pub fn run(step: &Step, workdir: &Path, env: Option<&HashMap<String, String>>) -
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-    let expected = step.expect.as_ref().and_then(|e| e.status).unwrap_or(0);
+    let expected = expect.and_then(|e| e.status).unwrap_or(0);
 
     if status == expected {
         CheckResult::pass_with(stdout, stderr)
     } else {
         CheckResult {
-            outcome: crate::checks::CheckOutcome::Failed { reason: format!("command exited with status {status} (expected {expected})") },
+            outcome: crate::checks::CheckOutcome::Failed {
+                reason: format!("command exited with status {status} (expected {expected})"),
+            },
             stdout,
             stderr,
         }

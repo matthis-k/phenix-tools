@@ -1,11 +1,8 @@
 use std::path::Path;
 
-use crate::model::Step;
-
 use super::CheckResult;
 
-pub fn run_exist(step: &Step, workdir: &Path) -> CheckResult {
-    let paths = &step.paths;
+pub fn run_exist(paths: &[String], workdir: &Path) -> CheckResult {
     if paths.is_empty() {
         return CheckResult::skip();
     }
@@ -31,8 +28,7 @@ pub fn run_exist(step: &Step, workdir: &Path) -> CheckResult {
     }
 }
 
-pub fn run_absent(step: &Step, workdir: &Path) -> CheckResult {
-    let paths = &step.paths;
+pub fn run_absent(paths: &[String], workdir: &Path) -> CheckResult {
     if paths.is_empty() {
         return CheckResult::skip();
     }

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::model::{NodeConfig, ResolvedNode, ResolvedTask};
+use crate::model::{NodeConfig, ResolvedNode, ResolvedTask, TaskKind};
 
 #[derive(Debug)]
 pub enum ConfigError {
@@ -29,9 +29,8 @@ pub fn validate_tasks(tasks: &[crate::model::TaskConfig]) -> Result<(), ConfigEr
         if !seen.insert(task.id.as_str()) {
             return Err(ConfigError::DuplicateTaskId(task.id.clone()));
         }
-        match task.kind.as_str() {
-            "command" | "filesExist" | "filesAbsent" | "forbidText" | "requireText" => {}
-            _ => return Err(ConfigError::UnknownKind(task.kind.clone())),
+        if !TaskKind::is_valid_kind(&task.kind) {
+            return Err(ConfigError::UnknownKind(task.kind.clone()));
         }
     }
     Ok(())

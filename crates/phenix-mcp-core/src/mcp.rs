@@ -86,17 +86,24 @@ fn tool_to_json(tool: &dyn McpTool) -> Value {
     }
 
     // Extract properties (without "required" key if present in schema)
-    let properties = {
-        let mut map = serde_json::Map::new();
-        if let Some(obj) = schema.as_object() {
-            for (k, v) in obj {
-                if k != "required" {
-                    map.insert(k.clone(), v.clone());
-                }
+    let mut properties_map = serde_json::Map::new();
+    if let Some(obj) = schema.as_object() {
+        for (k, v) in obj {
+            if k != "required" {
+                properties_map.insert(k.clone(), v.clone());
             }
         }
-        Value::Object(map)
-    };
+    }
+
+    // Inject "apply" property schema when required but not declared by tool
+    if meta.mutation.requires_apply() && !properties_map.contains_key("apply") {
+        properties_map.insert(
+            "apply".to_string(),
+            json!({ "type": "boolean", "description": "Must be true to execute" }),
+        );
+    }
+
+    let properties = Value::Object(properties_map);
 
     json!({
         "name": tool.name(),

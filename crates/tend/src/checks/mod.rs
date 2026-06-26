@@ -43,18 +43,3 @@ impl CheckResult {
         Self { outcome: CheckOutcome::Errored { reason: msg.into() }, stdout: String::new(), stderr: String::new() }
     }
 }
-
-pub fn dispatch_kind(
-    step: &crate::model::Step,
-    workdir: &std::path::Path,
-    env: Option<&std::collections::HashMap<String, String>>,
-) -> CheckResult {
-    match step.kind.as_str() {
-        "command" => command::run(step, workdir, env),
-        "filesExist" => files::run_exist(step, workdir),
-        "filesAbsent" => files::run_absent(step, workdir),
-        "forbidText" => text::run_forbid(step, workdir),
-        "requireText" => text::run_require(step, workdir),
-        _ => CheckResult::error(format!("unknown kind: {}", step.kind)),
-    }
-}
