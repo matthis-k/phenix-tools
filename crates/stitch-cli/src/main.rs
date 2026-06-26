@@ -720,33 +720,11 @@ fn cmd_commit(
         plan.actions.retain(|action| action.node() == selected_repo);
         plan.node_plans.retain(|node, _| node == selected_repo);
         plan.affected_nodes.retain(|node| node == selected_repo);
+        plan.blocked_reasons.retain(|reason| reason.starts_with(&format!("{}:", selected_repo)));
 
         if plan.actions.is_empty() {
             return Err(format!("Repo '{}' has no commit actions", selected_repo));
         }
-    }
-
-    if dry_run {
-        println!("{}", sync::format_plan_output(&plan, json_output));
-        return Ok(());
-    }
-
-    if !plan.blocked_reasons.is_empty() && !force {
-        println!("{}", sync::format_plan_output(&plan, json_output));
-        return Err("Commit blocked. Use --force to override or fix the issues.".to_string());
-    }
-
-    if plan.actions.is_empty() {
-        println!("Nothing to commit.");
-        return Ok(());
-    }
-
-    if !apply {
-        println!("{}", sync::format_plan_output(&plan, json_output));
-        return Err(
-            "Set --apply to execute the commit, or use --dry-run to preview."
-                .to_string(),
-        );
     }
 
     let mut messages: Option<BTreeMap<String, String>> = if let Some(path) = messages_path {
@@ -783,7 +761,30 @@ fn cmd_commit(
         msgs.insert(r, subject.to_string());
     }
 
-    if !dry_run {
+    if dry_run {
+        println!("{}", sync::format_plan_output(&plan, json_output));
+        return Ok(());
+    }
+
+    if !plan.blocked_reasons.is_empty() && !force {
+        println!("{}", sync::format_plan_output(&plan, json_output));
+        return Err("Commit blocked. Use --force to override or fix the issues.".to_string());
+    }
+
+    if plan.actions.is_empty() {
+        println!("Nothing to commit.");
+        return Ok(());
+    }
+
+    if !apply {
+        println!("{}", sync::format_plan_output(&plan, json_output));
+        return Err(
+            "Set --apply to execute the commit, or use --dry-run to preview."
+                .to_string(),
+        );
+    }
+
+    {
         let provided = messages.as_ref();
 
         for action in &plan.actions {
