@@ -14,7 +14,11 @@
         "id": "stitch-mcp-builds",
         "phase": "verify",
         "kind": "command",
-        "command": ["cargo", "build", "-p", "stitch-mcp"]
+        "command": ["cargo", "build", "-p", "stitch-mcp"],
+        "profiles": ["manual", "nix-check"],
+        "tags": ["rust", "build"],
+        "sandbox_safe": true,
+        "mutates": false
       }
     ]
   }

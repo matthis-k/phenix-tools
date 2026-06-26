@@ -171,9 +171,12 @@ impl PlanInput {
         PlanRequest {
             phase,
             mode,
+            profile: None,
             group,
             target,
             files,
+            offline: false,
+            locked: false,
         }
     }
 }
@@ -304,9 +307,12 @@ impl RunInput {
         PlanRequest {
             phase,
             mode,
+            profile: None,
             group,
             target,
             files,
+            offline: false,
+            locked: false,
         }
     }
 }
@@ -460,9 +466,12 @@ impl McpTool for TendExplainTool {
         let req = PlanRequest {
             phase: Phase::Verify,
             mode: RunMode::Force,
+            profile: None,
             group: None,
             target: None,
             files: Vec::new(),
+            offline: false,
+            locked: false,
         };
         let plan = match tend::planner::build_plan(&nodes, &req) {
             Ok(p) => p,

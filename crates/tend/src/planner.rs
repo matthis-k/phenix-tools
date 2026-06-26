@@ -126,6 +126,11 @@ pub fn build_plan(nodes: &[ResolvedNode], req: &PlanRequest) -> Result<Plan, Pla
                 continue;
             }
 
+            // Profile filtering: skip tasks that don't match the requested profile
+            if !task_matches_profile(task, req.profile.as_deref()) {
+                continue;
+            }
+
             if let Some(ref t) = req.target {
                 if task.config.id != *t {
                     continue;
@@ -259,6 +264,28 @@ pub fn build_plan(nodes: &[ResolvedNode], req: &PlanRequest) -> Result<Plan, Pla
     }
 
     Ok(Plan { items })
+}
+
+/// Check whether a task matches the requested profile.
+///
+/// Rules:
+/// - If a task has explicit profiles, it must include the requested profile.
+/// - If a task has no profiles, it matches only when no profile is requested
+///   or when the requested profile is "manual".
+/// - When no profile is requested, all tasks match.
+pub fn task_matches_profile(task: &ResolvedTask, requested_profile: Option<&str>) -> bool {
+    let task_profiles = match &task.config.profiles {
+        Some(p) => p,
+        None => {
+            // No profiles declared: match only for manual or no profile
+            return requested_profile.is_none_or(|p| p == "manual");
+        }
+    };
+
+    match requested_profile {
+        Some(p) => task_profiles.iter().any(|tp| tp == p),
+        None => true,
+    }
 }
 
 fn node_applies(node: &ResolvedNode, mode: RunMode, changed_files: Option<&[String]>) -> bool {
@@ -403,9 +430,12 @@ mod tests {
         PlanRequest {
             phase,
             mode,
+            profile: None,
             group: None,
             target: None,
             files: Vec::new(),
+            offline: false,
+            locked: false,
         }
     }
 
@@ -425,7 +455,11 @@ mod tests {
                     expect: None,
                 },
                 tags: None,
+                profiles: None,
                 mutates: Some(mutates),
+                interactive: None,
+                network: None,
+                sandbox_safe: None,
                 when: None,
                 always: None,
                 before: None,
@@ -485,5 +519,180 @@ mod tests {
         );
         let result = build_plan(&[node], &req(Phase::Fix, RunMode::Full));
         assert!(result.is_ok());
+    }
+
+    fn make_task_with_profiles(id: &str, profiles: Vec<&str>) -> ResolvedTask {
+        ResolvedTask {
+            config: TaskConfig {
+                id: id.to_string(),
+                description: None,
+                phase: Phase::Verify,
+                kind: TaskKind::Command {
+                    command: vec!["echo".to_string(), "hello".to_string()],
+                    expect: None,
+                },
+                tags: None,
+                profiles: Some(profiles.iter().map(|s| s.to_string()).collect()),
+                mutates: Some(false),
+                interactive: None,
+                network: None,
+                sandbox_safe: None,
+                when: None,
+                always: None,
+                before: None,
+                after: None,
+            },
+            parent_node_path: Path::new(".").to_path_buf(),
+        }
+    }
+
+    fn make_task_with_profiles_and_phase(id: &str, profiles: Vec<&str>, phase: Phase, mutates: bool) -> ResolvedTask {
+        ResolvedTask {
+            config: TaskConfig {
+                id: id.to_string(),
+                description: None,
+                phase,
+                kind: TaskKind::Command {
+                    command: vec!["echo".to_string(), "hello".to_string()],
+                    expect: None,
+                },
+                tags: None,
+                profiles: Some(profiles.iter().map(|s| s.to_string()).collect()),
+                mutates: Some(mutates),
+                interactive: None,
+                network: None,
+                sandbox_safe: None,
+                when: None,
+                always: None,
+                before: None,
+                after: None,
+            },
+            parent_node_path: Path::new(".").to_path_buf(),
+        }
+    }
+
+    fn req_with_profile(phase: Phase, mode: RunMode, profile: Option<&str>) -> PlanRequest {
+        PlanRequest {
+            phase,
+            mode,
+            profile: profile.map(|s| s.to_string()),
+            group: None,
+            target: None,
+            files: Vec::new(),
+            offline: false,
+            locked: false,
+        }
+    }
+
+    #[test]
+    fn test_git_hook_includes_format_config_checks() {
+        let task = make_task_with_profiles("tend-validate", vec!["git-hook", "manual"]);
+        let node = make_node("root", vec![task]);
+        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("git-hook"))).unwrap();
+        assert_eq!(plan.items.len(), 1);
+        assert_eq!(plan.items[0].task_id, "tend-validate");
+    }
+
+    #[test]
+    fn test_git_hook_excludes_cargo_test() {
+        let task = make_task_with_profiles("cargo-test", vec!["manual", "nix-check"]);
+        let node = make_node("root", vec![task]);
+        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("git-hook"))).unwrap();
+        assert_eq!(plan.items.len(), 0);
+    }
+
+    #[test]
+    fn test_git_hook_excludes_nix_flake_check() {
+        let task = make_task_with_profiles("nix-flake-check", vec!["manual"]);
+        let node = make_node("root", vec![task]);
+        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("git-hook"))).unwrap();
+        assert_eq!(plan.items.len(), 0);
+    }
+
+    #[test]
+    fn test_pre_push_includes_cargo_check() {
+        let task = make_task_with_profiles("cargo-check", vec!["pre-push", "manual"]);
+        let node = make_node("root", vec![task]);
+        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("pre-push"))).unwrap();
+        assert_eq!(plan.items.len(), 1);
+    }
+
+    #[test]
+    fn test_pre_push_includes_cargo_clippy() {
+        let task = make_task_with_profiles("cargo-clippy", vec!["pre-push", "manual"]);
+        let node = make_node("root", vec![task]);
+        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("pre-push"))).unwrap();
+        assert_eq!(plan.items.len(), 1);
+    }
+
+    #[test]
+    fn test_nix_check_includes_cargo_test() {
+        let task = make_task_with_profiles("cargo-test", vec!["nix-check", "manual"]);
+        let node = make_node("root", vec![task]);
+        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("nix-check"))).unwrap();
+        assert_eq!(plan.items.len(), 1);
+    }
+
+    #[test]
+    fn test_nix_check_excludes_nix_flake_check() {
+        let task = make_task_with_profiles("nix-flake-check", vec!["manual"]);
+        let node = make_node("root", vec![task]);
+        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("nix-check"))).unwrap();
+        assert_eq!(plan.items.len(), 0);
+    }
+
+    #[test]
+    fn test_manual_includes_nix_flake_check() {
+        let task = make_task_with_profiles("nix-flake-check", vec!["manual"]);
+        let node = make_node("root", vec![task]);
+        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("manual"))).unwrap();
+        assert_eq!(plan.items.len(), 1);
+    }
+
+    #[test]
+    fn test_fix_includes_mutating_formatters() {
+        // Fix profile tasks use Phase::Fix and allow mutating
+        let task = make_task_with_profiles_and_phase("rustfmt-fix", vec!["fix"], Phase::Fix, true);
+        let node = make_node("root", vec![task]);
+        let plan = build_plan(&[node], &req_with_profile(Phase::Fix, RunMode::Full, Some("fix"))).unwrap();
+        assert_eq!(plan.items.len(), 1);
+    }
+
+    #[test]
+    fn test_mutating_task_refused_in_verify_with_profile() {
+        // Even with a profile, mutating tasks are refused in verify phase
+        let task = make_task_with_profiles_and_phase("mutating-task", vec!["nix-check"], Phase::Verify, true);
+        let node = make_node("root", vec![task]);
+        let result = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("nix-check")));
+        assert!(result.is_err());
+        match result {
+            Err(PlanError::MutatingRefused(id)) => assert_eq!(id, "mutating-task"),
+            _ => panic!("expected MutatingRefused error"),
+        }
+    }
+
+    #[test]
+    fn test_default_profile_manual_for_no_profiles() {
+        let task = make_command_task(
+            "legacy-task",
+            Phase::Verify,
+            false,
+            vec!["echo".to_string(), "hi".to_string()],
+        );
+        let node = make_node("root", vec![task]);
+        // Task with no profiles should match when profile is "manual"
+        let plan = build_plan(&[node.clone()], &req_with_profile(Phase::Verify, RunMode::Full, Some("manual"))).unwrap();
+        assert_eq!(plan.items.len(), 1);
+        // Task with no profiles should NOT match when profile is "git-hook"
+        let plan2 = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("git-hook"))).unwrap();
+        assert_eq!(plan2.items.len(), 0);
+    }
+
+    #[test]
+    fn test_unknown_profile_results_in_empty_plan() {
+        let task = make_task_with_profiles("cargo-check", vec!["manual"]);
+        let node = make_node("root", vec![task]);
+        let plan = build_plan(&[node], &req_with_profile(Phase::Verify, RunMode::Full, Some("non-existent"))).unwrap();
+        assert_eq!(plan.items.len(), 0);
     }
 }

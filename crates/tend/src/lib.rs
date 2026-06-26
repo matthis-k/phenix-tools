@@ -4,4 +4,5 @@ pub mod discover;
 pub mod execute;
 pub mod model;
 pub mod planner;
+pub mod profiles;
 pub mod report;

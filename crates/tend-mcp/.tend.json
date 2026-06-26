@@ -14,7 +14,11 @@
         "id": "tend-mcp-builds",
         "phase": "verify",
         "kind": "command",
-        "command": ["cargo", "build", "-p", "tend-mcp"]
+        "command": ["cargo", "build", "-p", "tend-mcp"],
+        "profiles": ["manual", "nix-check"],
+        "tags": ["rust", "build"],
+        "sandbox_safe": true,
+        "mutates": false
       }
     ]
   }

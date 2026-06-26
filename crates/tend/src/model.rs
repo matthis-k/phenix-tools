@@ -161,7 +161,11 @@ pub struct TaskConfig {
     #[serde(flatten)]
     pub kind: TaskKind,
     pub tags: Option<Vec<String>>,
+    pub profiles: Option<Vec<String>>,
     pub mutates: Option<bool>,
+    pub interactive: Option<bool>,
+    pub network: Option<bool>,
+    pub sandbox_safe: Option<bool>,
     pub when: Option<WhenConfig>,
     pub always: Option<bool>,
     pub before: Option<Vec<StepConfig>>,
@@ -233,9 +237,12 @@ pub struct ResolvedTask {
 pub struct PlanRequest {
     pub phase: Phase,
     pub mode: RunMode,
+    pub profile: Option<String>,
     pub group: Option<String>,
     pub target: Option<String>,
     pub files: Vec<String>,
+    pub offline: bool,
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone)]

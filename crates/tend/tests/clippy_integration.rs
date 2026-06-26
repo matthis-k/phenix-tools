@@ -51,9 +51,12 @@ fn run_tend_config(root: &Path) -> Vec<execute::ExecutionResult> {
     let req = PlanRequest {
         phase: Phase::Verify,
         mode: RunMode::Force,
+        profile: None,
         group: None,
         target: None,
         files: vec![],
+        offline: false,
+        locked: false,
     };
 
     let plan = planner::build_plan(&nodes, &req).unwrap();
@@ -101,9 +104,12 @@ fn cargo_check_and_clippy_discovered_and_run() {
     let req = PlanRequest {
         phase: Phase::Verify,
         mode: RunMode::Force,
+        profile: None,
         group: None,
         target: None,
         files: vec![],
+        offline: false,
+        locked: false,
     };
 
     let plan = planner::build_plan(&nodes, &req).unwrap();

@@ -14,13 +14,21 @@
         "id": "mcp-core-builds",
         "phase": "verify",
         "kind": "command",
-        "command": ["cargo", "build", "-p", "phenix-mcp-core"]
+        "command": ["cargo", "build", "-p", "phenix-mcp-core"],
+        "profiles": ["manual", "nix-check"],
+        "tags": ["rust", "build"],
+        "sandbox_safe": true,
+        "mutates": false
       },
       {
         "id": "mcp-core-tests",
         "phase": "verify",
         "kind": "command",
-        "command": ["cargo", "test", "-p", "phenix-mcp-core"]
+        "command": ["cargo", "test", "-p", "phenix-mcp-core"],
+        "profiles": ["manual", "nix-check"],
+        "tags": ["rust", "test"],
+        "sandbox_safe": true,
+        "mutates": false
       }
     ]
   }

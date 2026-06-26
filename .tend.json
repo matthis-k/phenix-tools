@@ -14,6 +14,9 @@
         "id": "tend-crate-files",
         "phase": "verify",
         "kind": "filesExist",
+        "profiles": ["git-hook", "pre-push", "manual", "nix-check"],
+        "tags": ["tend", "fast"],
+        "sandbox_safe": true,
         "paths": [
           "crates/tend/Cargo.toml",
           "crates/tend/src/lib.rs",
@@ -27,11 +30,16 @@
         }
       },
       {
-        "id": "cargo-fmt",
+        "id": "rustfmt-check",
         "description": "Check Rust formatting",
         "phase": "verify",
         "kind": "command",
         "command": ["cargo", "fmt", "--all", "--check"],
+        "profiles": ["git-hook", "pre-push", "manual", "nix-check"],
+        "tags": ["format", "rust"],
+        "sandbox_safe": true,
+        "mutates": false,
+        "always": true,
         "when": {
           "changed": {
             "paths": ["Cargo.toml", "Cargo.lock", "crates/**/*.rs", "modules/**/*.nix"]
@@ -44,6 +52,11 @@
         "phase": "verify",
         "kind": "command",
         "command": ["cargo", "check", "--quiet", "--workspace", "--all-targets"],
+        "profiles": ["pre-push", "manual", "nix-check"],
+        "tags": ["rust", "compile"],
+        "sandbox_safe": true,
+        "mutates": false,
+        "always": true,
         "when": {
           "changed": {
             "paths": ["Cargo.toml", "Cargo.lock", "crates/**/*.rs"]
@@ -56,6 +69,11 @@
         "phase": "verify",
         "kind": "command",
         "command": ["cargo", "clippy", "--quiet", "--workspace", "--all-targets", "--", "-D", "warnings"],
+        "profiles": ["pre-push", "manual", "nix-check"],
+        "tags": ["rust", "lint"],
+        "sandbox_safe": true,
+        "mutates": false,
+        "always": true,
         "when": {
           "changed": {
             "paths": ["Cargo.toml", "Cargo.lock", "crates/**/*.rs"]
@@ -68,6 +86,27 @@
         "phase": "verify",
         "kind": "command",
         "command": ["cargo", "test", "--workspace"],
+        "profiles": ["manual", "nix-check"],
+        "tags": ["rust", "test"],
+        "sandbox_safe": true,
+        "mutates": false,
+        "always": true,
+        "when": {
+          "changed": {
+            "paths": ["Cargo.toml", "Cargo.lock", "crates/**/*.rs"]
+          }
+        }
+      },
+      {
+        "id": "rustfmt-fix",
+        "description": "Fix Rust formatting",
+        "phase": "fix",
+        "kind": "command",
+        "command": ["cargo", "fmt", "--all"],
+        "profiles": ["fix"],
+        "tags": ["format", "rust", "fix"],
+        "sandbox_safe": false,
+        "mutates": true,
         "when": {
           "changed": {
             "paths": ["Cargo.toml", "Cargo.lock", "crates/**/*.rs"]
