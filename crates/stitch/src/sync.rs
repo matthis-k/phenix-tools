@@ -603,8 +603,15 @@ fn update_flake_lock_input(repo_path: &Path, input_name: &str, rev: &str) -> Res
 
     let input_node = lock
         .get("nodes")
-        .and_then(|n| n.get(input_name))
-        .ok_or_else(|| format!("Input '{}' not found in flake.lock", input_name))?;
+        .and_then(|n| n.get(input_name));
+
+    let input_node = match input_node {
+        Some(node) => node,
+        None => {
+            eprintln!("warning: input '{}' not found in flake.lock (dependency may be declared in sync.json but not as a flake input)", input_name);
+            return Ok(());
+        }
+    };
 
     let original_url = input_node
         .get("original")
