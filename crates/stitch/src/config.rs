@@ -10,7 +10,9 @@ pub fn find_and_load() -> Result<WorkspaceConfig, String> {
     while let Some(dir) = current {
         let candidate = dir.join(".stitch.json");
         if candidate.exists() {
-            return load_from(&candidate);
+            let mut cfg = load_from(&candidate)?;
+            cfg.config_dir = Some(dir.to_path_buf());
+            return Ok(cfg);
         }
         current = dir.parent();
     }
@@ -33,6 +35,7 @@ pub fn find_and_load() -> Result<WorkspaceConfig, String> {
         version: 1,
         workspace: ws_name,
         repos,
+        config_dir: None,
     })
 }
 

@@ -18,13 +18,16 @@ fn main() {
         Commands::Status { json, short, dirty_only, repo } => cmd_status(*json, *short, *dirty_only, repo.as_deref()),
         Commands::Diff { repo, staged, json } => cmd_diff(repo.as_deref(), *staged, *json),
         Commands::Dag { mode, split, json } => cmd_dag(mode.as_deref(), split.as_deref(), *json),
-        Commands::Commit { message, repo, messages, write_template, dry_run, no_tend, staged, apply, sync: sync_flag, plan, json: json_output, no_push, force, resume } => {
-            if *sync_flag || resume.is_some() {
-                cmd_sync_commit(*sync_flag, *plan, *dry_run, *json_output, *no_push, *force, resume.as_deref(), messages.as_deref())
-            } else {
+        Commands::Commit { plan, dry_run, json: json_output, apply, no_push, force, resume, messages, message, repo, write_template, no_tend, staged } => {
+            if resume.is_some() || *apply || *plan || *dry_run || *no_push || *force || messages.is_some() || *write_template {
+                cmd_sync_commit(*plan, *dry_run, *json_output, *apply, *no_push, *force, resume.as_deref(), messages.as_deref())
+            } else if message.is_some() || repo.is_some() || *no_tend || *staged {
                 cmd_commit(message.as_deref(), repo.as_deref(), messages.as_deref(), *write_template, *dry_run, *no_tend, *staged, *apply)
+            } else {
+                cmd_sync_commit(*plan, *dry_run, *json_output, *apply, *no_push, *force, resume.as_deref(), messages.as_deref())
             }
         },
+        Commands::Push { dry_run, json: json_output } => cmd_push(*dry_run, *json_output),
         Commands::Changeset { command } => changeset::dispatch(command),
     };
 
@@ -74,38 +77,43 @@ enum Commands {
         #[arg(long, help = "Output as JSON")]
         json: bool,
     },
-    /// Create exact-file commits across repos
+    /// Create DAG-wide sync commits: commit changed nodes, update dependent flake inputs, validate, and push in dependency order
     Commit {
-        #[arg(short, long, help = "Commit message (single repo only)")]
-        message: Option<String>,
-        #[arg(long, help = "Repo name")]
-        repo: Option<String>,
-        #[arg(long, help = "Path to JSON messages file")]
-        messages: Option<String>,
-        #[arg(long, help = "Write message template and exit")]
-        write_template: bool,
-        #[arg(long, help = "Dry run (no actual commits)")]
+        #[arg(long, help = "Show the sync plan without executing")]
+        plan: bool,
+        #[arg(long, help = "Dry run (show plan, no mutations)")]
         dry_run: bool,
-        #[arg(long, help = "Skip tend pre-check")]
-        no_tend: bool,
-        #[arg(long, help = "Only commit previously staged files")]
-        staged: bool,
+        #[arg(long, help = "JSON output for agent usage")]
+        json: bool,
         #[arg(long, help = "Apply (required for actual commits)")]
         apply: bool,
-
-        // Sync flags
-        #[arg(long, help = "DAG-wide sync commit: commit changed nodes, update dependent flake inputs, validate, and push in dependency order")]
-        sync: bool,
-        #[arg(long, help = "Show the sync plan without executing (requires --sync)")]
-        plan: bool,
-        #[arg(long, help = "JSON output for agent usage (requires --sync)")]
-        json: bool,
-        #[arg(long, help = "Skip push phase after committing (requires --sync)")]
+        #[arg(long, help = "Commit locally without pushing")]
         no_push: bool,
-        #[arg(long, help = "Allow edge cases like detached HEAD (requires --sync)")]
+        #[arg(long, help = "Allow edge cases like detached HEAD")]
         force: bool,
-        #[arg(long, help = "Resume a failed sync transaction (requires --sync)")]
+        #[arg(long, help = "Resume a failed sync transaction")]
         resume: Option<String>,
+
+        // Legacy/fallback flags
+        #[arg(long, help = "Path to JSON messages file")]
+        messages: Option<String>,
+        #[arg(short, long, help = "Commit message (single repo only, legacy)")]
+        message: Option<String>,
+        #[arg(long, help = "Repo name (legacy)")]
+        repo: Option<String>,
+        #[arg(long, help = "Write message template and exit (legacy)")]
+        write_template: bool,
+        #[arg(long, help = "Skip tend pre-check (legacy)")]
+        no_tend: bool,
+        #[arg(long, help = "Only commit previously staged files (legacy)")]
+        staged: bool,
+    },
+    /// Push committed changes in DAG dependency order
+    Push {
+        #[arg(long, help = "Dry run (show what would be pushed)")]
+        dry_run: bool,
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
     },
     /// Manage changesets (legacy)
     Changeset {
@@ -329,11 +337,96 @@ fn cmd_dag(mode: Option<&str>, split: Option<&str>, json: bool) -> Result<(), St
     Ok(())
 }
 
+fn cmd_push(dry_run: bool, json_output: bool) -> Result<(), String> {
+    let cfg = config::find_and_load()?;
+    let dag = graph::discover_graph(&cfg)?;
+    let order = dag.topological_order()?;
+
+    let mut to_push = Vec::new();
+    for node_id in &order {
+        let node = match dag.get_node(node_id) {
+            Some(n) => n,
+            None => continue,
+        };
+        if !node.path.join(".git").exists() {
+            continue;
+        }
+        let remote = git::git_remote(&node.path, "origin").ok();
+        if remote.is_none() {
+            continue;
+        }
+        let ahead = git::git_ahead_count(&node.path, &node.branch, "origin").unwrap_or(0);
+        if ahead > 0 {
+            to_push.push((node_id.clone(), node.name.clone(), ahead));
+        }
+    }
+
+    if to_push.is_empty() {
+        if json_output {
+            println!(r#"{{"pushed": [], "message": "Nothing to push"}}"#);
+        } else {
+            println!("Nothing to push.");
+        }
+        return Ok(());
+    }
+
+    if json_output {
+        let nodes: Vec<serde_json::Value> = to_push.iter().map(|(id, name, ahead)| {
+            serde_json::json!({"name": name, "id": id, "ahead": ahead})
+        }).collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "push_order": order.iter().filter(|id| to_push.iter().any(|(tid, _, _)| tid == *id)).collect::<Vec<_>>(),
+            "nodes": nodes
+        })).unwrap());
+        if dry_run {
+            return Ok(());
+        }
+    } else if dry_run {
+        println!("Would push (dependency order):");
+        for (_, name, ahead) in &to_push {
+            println!("  {} ({} ahead)", name, ahead);
+        }
+        return Ok(());
+    } else {
+        println!("Pushing (dependency order):");
+    }
+
+    let mut results: BTreeMap<String, Result<(), String>> = BTreeMap::new();
+    for (node_id, name, _) in &to_push {
+        let node = dag.get_node(node_id).ok_or_else(|| format!("Node '{}' not found", node_id))?;
+        if !json_output {
+            print!("  {}... ", name);
+        }
+        let result = git::git_push(&node.path, &node.branch);
+        if let Err(ref e) = result {
+            if !json_output {
+                println!("FAILED: {}", e);
+            }
+            results.insert(name.clone(), Err(e.clone()));
+            return Err(format!("Push failed for '{}': {}", name, e));
+        }
+        if !json_output {
+            println!("pushed");
+        }
+        results.insert(name.clone(), Ok(()));
+    }
+
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "pushed": results.iter().map(|(name, r)| {
+                serde_json::json!({"name": name, "success": r.is_ok(), "error": r.as_ref().err()})
+            }).collect::<Vec<_>>()
+        })).unwrap());
+    }
+
+    Ok(())
+}
+
 fn cmd_sync_commit(
-    sync_flag: bool,
     plan_mode: bool,
     dry_run: bool,
     json_output: bool,
+    apply: bool,
     no_push: bool,
     force: bool,
     resume_id: Option<&str>,
@@ -345,10 +438,6 @@ fn cmd_sync_commit(
         let result = sync::resume_sync(tx_id, &cfg, no_push)?;
         println!("{}", sync::format_result_output(&result, json_output));
         return Ok(());
-    }
-
-    if !sync_flag {
-        return Err("Internal error: cmd_sync_commit called without --sync".to_string());
     }
 
     let dag = graph::discover_graph(&cfg)?;
@@ -368,6 +457,11 @@ fn cmd_sync_commit(
     if plan.commit_order.is_empty() {
         println!("Nothing to sync commit.");
         return Ok(());
+    }
+
+    if !apply {
+        println!("{}", sync::format_plan_output(&plan, json_output));
+        return Err("Set --apply to execute the sync commit, or use --plan or --dry-run to preview.".to_string());
     }
 
     let messages: Option<BTreeMap<String, String>> = if let Some(path) = messages_path {

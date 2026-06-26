@@ -296,7 +296,7 @@ pub struct StitchCommitTemplateTool;
 
 impl McpTool for StitchCommitTemplateTool {
     fn name(&self) -> &str { "stitch.commit_template" }
-    fn description(&self) -> &str { "Generate a JSON message template for all commit nodes (read-only)" }
+    fn description(&self) -> &str { "Generate a JSON message template for sync commit nodes (read-only)" }
     fn metadata(&self) -> ToolMetadata { tool_meta(MutationLevel::ReadOnly) }
     fn input_schema(&self) -> Value {
         json!({
@@ -311,7 +311,7 @@ impl McpTool for StitchCommitTemplateTool {
         let staged = input.get("staged").and_then(|v| v.as_bool()).unwrap_or(false);
 
         let cfg = stitch::config::find_and_load().unwrap_or(
-            stitch::model::WorkspaceConfig { version: 1, workspace: ".".to_string(), repos: vec![] }
+            stitch::model::WorkspaceConfig { version: 1, workspace: ".".to_string(), repos: vec![], config_dir: None }
         );
         let statuses = stitch::status::collect_all(&cfg).unwrap_or_default();
 
@@ -345,160 +345,23 @@ pub struct StitchCommitTool;
 
 impl McpTool for StitchCommitTool {
     fn name(&self) -> &str { "stitch.commit" }
-    fn description(&self) -> &str { "Create exact-file commits across repos. Requires apply: true" }
+    fn description(&self) -> &str { "DAG-wide sync commit: commit changed nodes, update dependent flake inputs, validate, and push in dependency order. Requires apply: true" }
     fn metadata(&self) -> ToolMetadata { tool_meta(MutationLevel::CreatesCommit) }
     fn input_schema(&self) -> Value {
         json!({
             "apply": { "type": "boolean", "description": "Must be true to execute" },
-            "staged": { "type": "boolean", "description": "Only commit previously staged files" },
-            "dag_id": { "type": "string" },
+            "dry_run": { "type": "boolean", "description": "Plan mode (no mutations)" },
+            "no_push": { "type": "boolean", "description": "Commit locally without pushing" },
+            "force": { "type": "boolean", "description": "Allow edge cases like detached HEAD" },
             "messages": {
                 "type": "object",
-                "description": "Keyed by node ID, each with subject, body, files",
+                "description": "Keyed by node name, each with subject, body, files",
                 "additionalProperties": {
                     "type": "object",
                     "properties": {
                         "subject": { "type": "string" },
                         "body": { "type": "string" },
                         "files": { "type": "array", "items": { "type": "string" } }
-                    }
-                }
-            },
-            "repo": { "type": "string" },
-            "message": { "type": "string" },
-            "run_tend": { "type": "boolean" },
-            "dry_run": { "type": "boolean" }
-        })
-    }
-    fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolFailure> {
-        let audit_id = ctx.audit.generate_id();
-        let apply = input.get("apply").and_then(|v| v.as_bool()).unwrap_or(false);
-        let dry_run = input.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
-        let staged = input.get("staged").and_then(|v| v.as_bool()).unwrap_or(false);
-        let run_tend = input.get("run_tend").and_then(|v| v.as_bool()).unwrap_or(true);
-
-        if !apply && !dry_run {
-            return Err(mk_err(ErrorKind::PolicyDenied, "Must set apply=true to execute, or use dry_run=true", &audit_id));
-        }
-
-        let messages = input.get("messages").and_then(|v| v.as_object());
-        let single_message = input.get("message").and_then(|v| v.as_str());
-        let single_repo = input.get("repo").and_then(|v| v.as_str());
-
-        let cfg = match stitch::config::find_and_load() {
-            Ok(c) => c,
-            Err(e) => return Err(mk_err(ErrorKind::NotFound, &format!("Config: {}", e), &audit_id)),
-        };
-
-        let statuses = stitch::status::collect_all(&cfg).unwrap_or_default();
-
-        if run_tend && apply {
-            let root = std::env::current_dir().unwrap_or_default();
-            if let Ok(discovered) = tend::discover::discover_configs(&root, None) {
-                let nodes = tend::discover::resolve_nodes(&root, discovered);
-                if let Ok(plan) = tend::planner::build_plan(&nodes, "verify", "changed", None) {
-                    let results = tend::execute::execute_plan(&plan.items, &root);
-                    let failures: Vec<_> = results.iter().filter(|r| !r.passed && !r.skipped).collect();
-                    if !failures.is_empty() {
-                        return Err(ToolFailure::new(ErrorKind::Conflict,
-                            format!("Tend gate blocked commit: {} check(s) failed", failures.len()), &audit_id));
-                    }
-                }
-            }
-        }
-
-        let mut created: Vec<Value> = Vec::new();
-        let mut failed: Vec<Value> = Vec::new();
-
-        for s in &statuses {
-            if !s.is_dirty { continue; }
-            if let Some(repo) = single_repo { if s.name != repo { continue; } }
-
-            let repo_cfg = match cfg.repos.iter().find(|r| r.name == s.name) { Some(r) => r, None => continue };
-            let repo_path = repo_cfg.resolved_path(&cfg);
-            let diff = if staged {
-                stitch::git::git_diff_cached_names(&repo_path).unwrap_or_default()
-            } else {
-                stitch::git::git_diff_names(&repo_path).unwrap_or_default()
-            };
-
-            let node_key = format!("{}:commit", s.name);
-            let mut files_to_stage = diff.clone();
-
-            if let Some(msgs) = messages {
-                if let Some(node_msg) = msgs.get(&node_key) {
-                    if let Some(files) = node_msg.get("files").and_then(|v| v.as_array()) {
-                        files_to_stage = files.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect();
-                    }
-                }
-            }
-
-            if files_to_stage.is_empty() { continue; }
-
-            if dry_run {
-                created.push(json!({
-                    "repo": s.name,
-                    "node": node_key,
-                    "would_stage": files_to_stage,
-                    "would_message": single_message.unwrap_or(&format!("Apply changes to {}", s.name))
-                }));
-                continue;
-            }
-
-            let msg = if let Some(msgs) = messages {
-                if let Some(node_msg) = msgs.get(&node_key) {
-                    node_msg.get("subject").and_then(|v| v.as_str()).unwrap_or(&format!("Apply changes to {}", s.name)).to_string()
-                } else { format!("Apply changes to {}", s.name) }
-            } else if let Some(m) = single_message {
-                m.to_string()
-            } else {
-                format!("Apply changes to {}", s.name)
-            };
-
-            if let Err(e) = stitch::git::git_add(&repo_path, &files_to_stage) {
-                failed.push(json!({"repo": s.name, "error": e}));
-                continue;
-            }
-
-            let trailed = stitch::model::add_trailers(&msg, &audit_id[..8], &cfg.workspace);
-            match stitch::git::git_commit(&repo_path, &trailed) {
-                Ok(()) => {
-                    let hash = stitch::git::git_short_head(&repo_path).ok();
-                    created.push(json!({"repo": s.name, "hash": hash, "message": msg, "files": files_to_stage}));
-                },
-                Err(e) => { failed.push(json!({"repo": s.name, "error": e})); }
-            }
-        }
-
-        let result = ToolResult::ok(
-            json!({ "created_commits": created, "failed": failed }),
-            format!("{} commit(s) created, {} failed", created.len(), failed.len()),
-            &audit_id,
-        );
-        Ok(serde_json::to_value(&result).unwrap_or_default())
-    }
-}
-
-pub struct StitchCommitSyncTool;
-
-impl McpTool for StitchCommitSyncTool {
-    fn name(&self) -> &str { "stitch.commit_sync" }
-    fn description(&self) -> &str { "Create DAG-wide synced commits. Commits changed nodes, updates dependent flake inputs, validates, and pushes in dependency order." }
-    fn metadata(&self) -> ToolMetadata { tool_meta(MutationLevel::CreatesCommit) }
-    fn input_schema(&self) -> Value {
-        json!({
-            "apply": { "type": "boolean", "description": "Must be true to execute" },
-            "dry_run": { "type": "boolean", "description": "Plan mode (no mutations)" },
-            "no_push": { "type": "boolean", "description": "Skip push phase after committing" },
-            "force": { "type": "boolean", "description": "Allow edge cases like detached HEAD" },
-            "messages": {
-                "type": "object",
-                "description": "Keyed by node name, each with subject, body",
-                "additionalProperties": {
-                    "type": "object",
-                    "properties": {
-                        "subject": { "type": "string" },
-                        "body": { "type": "string" }
                     }
                 }
             },
@@ -522,6 +385,7 @@ impl McpTool for StitchCommitSyncTool {
             Err(e) => return Err(mk_err(ErrorKind::NotFound, &format!("Config: {}", e), &audit_id)),
         };
 
+        // Resume mode
         if let Some(tx_id) = resume_id {
             let result = match sync::resume_sync(tx_id, &cfg, no_push) {
                 Ok(r) => r,
@@ -577,6 +441,7 @@ impl McpTool for StitchCommitSyncTool {
                                 &audit_id));
                         }
 
+                        // Load messages
                         let messages: Option<BTreeMap<String, String>> = input.get("messages")
                             .and_then(|v| v.as_object())
                             .map(|obj| {
@@ -612,6 +477,38 @@ impl McpTool for StitchCommitSyncTool {
             }
             Err(e) => Err(mk_err(ErrorKind::NotFound, &format!("Graph discovery: {}", e), &audit_id)),
         }
+    }
+}
+
+pub struct StitchCommitSyncTool;
+
+impl McpTool for StitchCommitSyncTool {
+    fn name(&self) -> &str { "stitch.commit_sync" }
+    fn description(&self) -> &str { "Alias for stitch.commit. DAG-wide sync commit is now the default." }
+    fn metadata(&self) -> ToolMetadata { tool_meta(MutationLevel::CreatesCommit) }
+    fn input_schema(&self) -> Value {
+        json!({
+            "apply": { "type": "boolean", "description": "Must be true to execute" },
+            "dry_run": { "type": "boolean", "description": "Plan mode (no mutations)" },
+            "no_push": { "type": "boolean", "description": "Commit locally without pushing" },
+            "force": { "type": "boolean", "description": "Allow edge cases like detached HEAD" },
+            "messages": {
+                "type": "object",
+                "description": "Keyed by node name, each with subject, body",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                        "subject": { "type": "string" },
+                        "body": { "type": "string" }
+                    }
+                }
+            },
+            "resume": { "type": "string", "description": "Transaction ID to resume" }
+        })
+    }
+    fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolFailure> {
+        // Delegate to stitch.commit
+        StitchCommitTool.call(input, ctx)
     }
 }
 

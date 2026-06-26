@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -7,6 +7,8 @@ pub struct WorkspaceConfig {
     pub version: u32,
     pub workspace: String,
     pub repos: Vec<RepoConfig>,
+    #[serde(skip)]
+    pub config_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,13 +18,14 @@ pub struct RepoConfig {
 }
 
 impl RepoConfig {
-    pub fn resolved_path(&self, _ws: &WorkspaceConfig) -> std::path::PathBuf {
+    pub fn resolved_path(&self, ws: &WorkspaceConfig) -> PathBuf {
         let p = Path::new(&self.path);
         if p.is_absolute() {
             p.to_path_buf()
+        } else if let Some(ref config_dir) = ws.config_dir {
+            config_dir.join(p)
         } else {
-            let cwd = std::env::current_dir().unwrap_or_default();
-            cwd.join(p)
+            std::env::current_dir().unwrap_or_default().join(p)
         }
     }
 }

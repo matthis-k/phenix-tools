@@ -181,6 +181,37 @@ pub fn has_merge_conflict_markers(repo: &Path) -> Result<bool, String> {
     Ok(output.status.success())
 }
 
+pub fn git_ahead_count(repo: &Path, branch: &str, remote: &str) -> Result<usize, String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-list", "--count", "--left-right", &format!("{}/{}...HEAD", remote, branch)])
+        .current_dir(repo)
+        .output()
+        .map_err(|e| format!("git rev-list: {}", e))?;
+    if !output.status.success() {
+        return Ok(0);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Format: "ahead\tbehind\n"
+    if let Some(tab) = stdout.find('\t') {
+        Ok(stdout[..tab].parse::<usize>().unwrap_or(0))
+    } else {
+        Ok(0)
+    }
+}
+
+pub fn git_push(repo: &Path, branch: &str) -> Result<(), String> {
+    let output = std::process::Command::new("git")
+        .args(["push", "origin", branch])
+        .current_dir(repo)
+        .output()
+        .map_err(|e| format!("git push: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git push failed: {}", stderr.trim()));
+    }
+    Ok(())
+}
+
 pub fn git_remote(repo: &Path, name: &str) -> Result<String, String> {
     let output = std::process::Command::new("git")
         .args(["remote", "get-url", name])

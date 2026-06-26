@@ -148,6 +148,7 @@ mod tests {
                 name: "test-repo".to_string(),
                 path: path_str.clone(),
             }],
+            config_dir: None,
         };
 
         let cs = Changeset {
@@ -183,6 +184,7 @@ mod tests {
                 name: "ghost-repo".to_string(),
                 path: "/tmp/__stitch_test_ghost__".to_string(),
             }],
+            config_dir: None,
         };
 
         let cs = Changeset {
