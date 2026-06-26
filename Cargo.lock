@@ -525,6 +525,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "stitch-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde",
+ "serde_json",
+ "stitch",
+ "tend",
+]
+
+[[package]]
 name = "stitch-mcp"
 version = "0.1.0"
 dependencies = [
@@ -569,12 +580,21 @@ dependencies = [
 name = "tend"
 version = "0.1.0"
 dependencies = [
- "clap",
  "globset",
  "serde",
  "serde_json",
  "tempfile",
  "walkdir",
+]
+
+[[package]]
+name = "tend-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde",
+ "serde_json",
+ "tend",
 ]
 
 [[package]]

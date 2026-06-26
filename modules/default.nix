@@ -6,20 +6,20 @@
       src = ../.;
       cargoLock.lockFile = ../Cargo.lock;
     };
-    stitchPkg = pkgs.rustPlatform.buildRustPackage {
+    stitchCliPkg = pkgs.rustPlatform.buildRustPackage {
       pname = "stitch";
       version = "0.1.0";
       src = ../.;
       cargoLock.lockFile = ../Cargo.lock;
-      cargoBuildFlags = "-p stitch";
+      cargoBuildFlags = "-p stitch-cli";
     };
   in {
-    packages.stitch = stitchPkg;
+    packages.stitch = stitchCliPkg;
     packages.default = tools;
 
     apps.stitch = {
       type = "app";
-      program = "${stitchPkg}/bin/stitch";
+      program = "${stitchCliPkg}/bin/stitch";
     };
     apps.default = {
       type = "app";

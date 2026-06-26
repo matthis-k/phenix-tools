@@ -2,13 +2,11 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-mod checks;
-mod config;
-mod discover;
-mod execute;
-mod model;
-mod planner;
-mod report;
+use tend::config;
+use tend::discover;
+use tend::execute;
+use tend::planner;
+use tend::report;
 
 #[derive(Parser)]
 #[command(name = "tend", version, about = "Low-level composable task/verification/hook harness for Phenix")]
@@ -36,22 +34,16 @@ enum Commands {
     },
     /// Show which checks would run and why (read-only check plan)
     Plan {
-        /// Match mode: changed, staged, all
         #[arg(long, default_value = "changed")]
         mode: String,
-        /// Only show checks in this group
         #[arg(long)]
         group: Option<String>,
-        /// Only show this target
         #[arg(long)]
         target: Option<String>,
-        /// Git base ref for diff
         #[arg(long)]
         base: Option<String>,
-        /// Output as JSON
         #[arg(long)]
         json: bool,
-        /// Explicit file paths (use with --mode selected)
         files: Vec<String>,
     },
     /// Run non-mutating verification tasks
@@ -75,19 +67,14 @@ enum Commands {
 
 #[derive(Subcommand, Clone, Debug)]
 enum VerifyMode {
-    /// Run only tasks affected by changed files
     Changed,
-    /// Run all tasks, respecting when.changed.paths
     Full,
-    /// Run all tasks, ignoring when.changed.paths
     Force,
 }
 
 #[derive(Subcommand, Clone, Debug)]
 enum FixMode {
-    /// Run only tasks affected by changed files
     Changed,
-    /// Run all applicable tasks
     All,
 }
 

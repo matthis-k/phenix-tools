@@ -16,7 +16,9 @@
         "kind": "filesExist",
         "paths": [
           "crates/tend/Cargo.toml",
-          "crates/tend/src/main.rs"
+          "crates/tend/src/lib.rs",
+          "crates/tend-cli/Cargo.toml",
+          "crates/tend-cli/src/main.rs"
         ]
       }
     ]

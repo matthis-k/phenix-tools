@@ -1,18 +1,14 @@
 [package]
-name = "stitch"
+name = "tend-cli"
 version = "0.1.0"
 edition = "2021"
-autobins = false
 
-[lib]
-name = "stitch"
-path = "src/lib.rs"
+[[bin]]
+name = "tend"
+path = "src/main.rs"
 
 [dependencies]
+tend = { path = "../tend" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tend = { path = "../tend" }
-
-[dev-dependencies]
-tempfile = "3"

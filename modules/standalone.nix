@@ -6,24 +6,40 @@
       src = ../.;
       cargoLock.lockFile = ../Cargo.lock;
     };
-    tendPkg = pkgs.rustPlatform.buildRustPackage {
+    tendCliPkg = pkgs.rustPlatform.buildRustPackage {
       pname = "tend";
       version = "0.1.0";
       src = ../.;
       cargoLock.lockFile = ../Cargo.lock;
-      cargoBuildFlags = "-p tend";
+      cargoBuildFlags = "-p tend-cli";
     };
-    stitchPkg = pkgs.rustPlatform.buildRustPackage {
+    stitchCliPkg = pkgs.rustPlatform.buildRustPackage {
       pname = "stitch";
       version = "0.1.0";
       src = ../.;
       cargoLock.lockFile = ../Cargo.lock;
-      cargoBuildFlags = "-p stitch";
+      cargoBuildFlags = "-p stitch-cli";
+    };
+
+    # Legacy packages (deprecated)
+    tendPkg = pkgs.rustPlatform.buildRustPackage {
+      pname = "tend-legacy";
+      version = "0.1.0";
+      src = ../.;
+      cargoLock.lockFile = ../Cargo.lock;
+      cargoBuildFlags = "-p tend-cli";
+    };
+    stitchPkg = pkgs.rustPlatform.buildRustPackage {
+      pname = "stitch-legacy";
+      version = "0.1.0";
+      src = ../.;
+      cargoLock.lockFile = ../Cargo.lock;
+      cargoBuildFlags = "-p stitch-cli";
     };
   in {
     packages.gate = tools;
-    packages.tend = tendPkg;
-    packages.stitch = stitchPkg;
+    packages.tend = tendCliPkg;
+    packages.stitch = stitchCliPkg;
     packages.default = tools;
 
     apps.gate = {
@@ -34,11 +50,11 @@
     };
     apps.tend = {
       type = "app";
-      program = "${tendPkg}/bin/tend";
+      program = "${tendCliPkg}/bin/tend";
     };
     apps.stitch = {
       type = "app";
-      program = "${stitchPkg}/bin/stitch";
+      program = "${stitchCliPkg}/bin/stitch";
     };
     apps.default = {
       type = "app";

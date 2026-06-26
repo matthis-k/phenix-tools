@@ -31,6 +31,12 @@ enum Commands {
 }
 
 fn main() {
+    eprintln!("warning: `phenix-tools` / `pt` is deprecated. Use `tend` and `stitch` instead.");
+    eprintln!("  tend gate   ->  tend gate");
+    eprintln!("  pt gate     ->  tend gate");
+    eprintln!("  pt completions -> deprecated (use shell built-in)");
+    eprintln!();
+
     let cli = Cli::parse();
 
     match cli.command {

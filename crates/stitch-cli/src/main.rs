@@ -1,11 +1,10 @@
 use clap::{Parser, Subcommand};
 
-mod changeset;
-mod config;
-mod git;
-mod model;
-mod status;
-mod validate;
+use stitch::changeset;
+use stitch::config;
+use stitch::git;
+use stitch::model;
+use stitch::status;
 
 fn main() {
     let cli = Cli::parse();
@@ -81,7 +80,7 @@ enum Commands {
         dry_run: bool,
         #[arg(long, help = "Skip tend pre-check")]
         no_tend: bool,
-        #[arg(long, help = "Only commit previously staged files (git add)")]
+        #[arg(long, help = "Only commit previously staged files")]
         staged: bool,
         #[arg(long, help = "Apply (required for actual commits)")]
         apply: bool,
@@ -96,7 +95,7 @@ enum Commands {
 fn cmd_repos() -> Result<(), String> {
     let cfg = config::find_and_load()?;
     for repo in &cfg.repos {
-        let exists = if repo.resolved_path(&cfg).exists() { "✓" } else { "✗" };
+        let exists = if repo.resolved_path(&cfg).exists() { "\u{2713}" } else { "\u{2717}" };
         println!("{}  {}  ({})", exists, repo.name, repo.path);
     }
     Ok(())
