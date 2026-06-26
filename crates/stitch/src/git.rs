@@ -243,8 +243,27 @@ impl GitRepo {
     }
 
     pub fn is_mid_merge(&self) -> Result<bool, String> {
-        let mergets = self.path.join(".git/MERGE_MSG");
-        Ok(mergets.exists())
+        let output = Command::new("git")
+            .args(["rev-parse", "--git-path", "MERGE_MSG"])
+            .current_dir(&self.path)
+            .output()
+            .map_err(|e| format!("git rev-parse --git-path MERGE_MSG: {e}"))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "git rev-parse --git-path MERGE_MSG: {}",
+                stderr.trim()
+            ));
+        }
+
+        let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let merge_msg_path = if Path::new(&raw).is_absolute() {
+            PathBuf::from(raw)
+        } else {
+            self.path.join(raw)
+        };
+        Ok(merge_msg_path.exists())
     }
 
     pub fn remote_url(&self, name: &str) -> Result<String, String> {
@@ -291,12 +310,6 @@ pub fn parse_porcelain(porcelain: &str) -> Vec<GitChange> {
 
     let mut changes = Vec::new();
     for line in porcelain.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        // Only trim trailing whitespace to preserve leading space in XY status columns
         let line = line.trim_end();
         if line.len() < 2 {
             continue;
