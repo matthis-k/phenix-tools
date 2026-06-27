@@ -8,7 +8,6 @@ use clap::{Parser, Subcommand};
 use stitch::config;
 use stitch::exec;
 use stitch::git;
-use stitch::graph;
 use stitch::recipe;
 use stitch::status;
 use stitch::sync;
@@ -353,29 +352,27 @@ fn cmd_hooks(command: &HooksCommand) -> Result<(), String> {
 
                 let is_root = repo.name == "phenix";
 
-                let hooks = [
-                    ("pre-commit", {
-                        if is_root {
-                            "nix develop .#default --command tend check --profile git-hook --staged --affected-dag"
-                        } else {
-                            &format!(
-                                "nix develop {root}/#default --command tend check --root {sub} --profile git-hook --staged",
-                                root = root.display(),
-                                sub = repo.path,
-                            )
-                        }
-                    }),
-                    ("pre-push", {
-                        if is_root {
-                            "nix develop .#default --command tend check --profile pre-push --affected-dag"
-                        } else {
-                            &format!(
-                                "nix develop {root}/#default --command tend check --root {sub} --profile pre-push",
-                                root = root.display(),
-                                sub = repo.path,
-                            )
-                        }
-                    }),
+                let pre_commit_cmd: String = if is_root {
+                    "nix develop .#default --command tend check --profile git-hook --staged --affected-dag".to_string()
+                } else {
+                    format!(
+                        "nix develop {root}/#default --command tend check --root {sub} --profile git-hook --staged",
+                        root = root.display(),
+                        sub = repo.path,
+                    )
+                };
+                let pre_push_cmd: String = if is_root {
+                    "nix develop .#default --command tend check --profile pre-push --affected-dag".to_string()
+                } else {
+                    format!(
+                        "nix develop {root}/#default --command tend check --root {sub} --profile pre-push",
+                        root = root.display(),
+                        sub = repo.path,
+                    )
+                };
+                let hooks: [(&str, &str); 2] = [
+                    ("pre-commit", &pre_commit_cmd),
+                    ("pre-push", &pre_push_cmd),
                 ];
 
                 for (hook_name, hook_cmd) in &hooks {
@@ -1139,61 +1136,106 @@ fn cmd_status(
     repo_filter: Option<&str>,
 ) -> Result<(), String> {
     let cfg = config::find_and_load()?;
-    let statuses = status::collect_all(&cfg)?;
+
+    let explicit_nodes: Vec<String> = repo_filter.map(|r| vec![r.to_string()]).unwrap_or_default();
+    let selection = if repo_filter.is_some() {
+        exec::SelectionMode::Explicit
+    } else {
+        exec::SelectionMode::All
+    };
+
+    let scope = exec::ExecutionScope {
+        selection,
+        explicit_nodes,
+        closure: exec::ClosureMode::SelfOnly,
+        order: exec::OrderMode::Stable,
+    };
+
+    let steps = vec![exec::ExecutionStep {
+        id: "collect-status".to_string(),
+        mode: exec::ExecutionMode::ReadOnly,
+        kind: exec::StepKind::Builtin {
+            name: "git.collect-status".to_string(),
+            args: serde_json::Value::Null,
+        },
+        condition: None,
+    }];
+
+    let plan = exec::build_plan(&cfg, &scope, steps)?;
+    let opts = exec::RunOptions {
+        dry_run: false,
+        apply: false,
+        json: false,
+    };
+    let report = exec::run_plan(&cfg, &plan, &opts)?;
+
+    let mut statuses: Vec<serde_json::Value> = Vec::new();
+    for nr in &report.node_results {
+        for sr in &nr.step_results {
+            if sr.success && !sr.stdout.is_empty() {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&sr.stdout) {
+                    statuses.push(val);
+                }
+            }
+        }
+    }
+
+    let filtered: Vec<&serde_json::Value> = statuses
+        .iter()
+        .filter(|s| !dirty_only || s.get("is_dirty").and_then(|v| v.as_bool()).unwrap_or(false))
+        .collect();
 
     if json {
-        let filtered: Vec<_> = statuses
-            .iter()
-            .filter(|s| repo_filter.is_none_or(|r| s.name == r))
-            .filter(|s| !dirty_only || s.is_dirty)
-            .collect();
         let output = serde_json::to_string_pretty(&filtered).map_err(|e| format!("JSON: {}", e))?;
         println!("{}", output);
         return Ok(());
     }
 
     if short {
-        for s in &statuses {
-            if repo_filter.is_none_or(|r| s.name == r) && (!dirty_only || s.is_dirty) {
-                let prefix = if s.is_dirty { "M" } else { " " };
-                println!("{}  {}  {}", prefix, s.name, s.branch);
-            }
+        for s in &filtered {
+            let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+            let branch = s.get("branch").and_then(|v| v.as_str()).unwrap_or("?");
+            let is_dirty = s.get("is_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
+            let prefix = if is_dirty { "M" } else { " " };
+            println!("{}  {}  {}", prefix, name, branch);
         }
         return Ok(());
     }
 
     println!("Workspace: {}", cfg.workspace);
     println!();
-    for s in &statuses {
-        if repo_filter.is_none_or(|r| s.name == r) && (!dirty_only || s.is_dirty) {
-            let dirty = if s.is_dirty { "yes" } else { "no" };
-            println!("{}", s.name);
-            println!("  branch: {}", s.branch);
-            println!("  dirty: {}", dirty);
-            println!("  staged: {}", s.staged_count);
-            println!("  unstaged: {}", s.unstaged_count);
-            println!("  untracked: {}", s.untracked_count);
-            if s.is_dirty {
-                let path = cfg
-                    .repos
-                    .iter()
-                    .find(|r| r.name == s.name)
-                    .map(|r| r.resolved_path(&cfg));
-                if let Some(p) = path {
-                    let diff = git::git_diff_names(&p).unwrap_or_default();
-                    for f in &diff {
-                        println!("    M {}", f);
-                    }
+    for s in &filtered {
+        let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+        let branch = s.get("branch").and_then(|v| v.as_str()).unwrap_or("?");
+        let is_dirty = s.get("is_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
+        let staged_count = s.get("staged_count").and_then(|v| v.as_u64()).unwrap_or(0);
+        let unstaged_count = s.get("unstaged_count").and_then(|v| v.as_u64()).unwrap_or(0);
+        let untracked_count = s.get("untracked_count").and_then(|v| v.as_u64()).unwrap_or(0);
+        let is_present = s.get("is_present").and_then(|v| v.as_bool()).unwrap_or(false);
+
+        let dirty = if is_dirty { "yes" } else { "no" };
+        println!("{}", name);
+        println!("  branch: {}", branch);
+        println!("  dirty: {}", dirty);
+        println!("  staged: {}", staged_count);
+        println!("  unstaged: {}", unstaged_count);
+        println!("  untracked: {}", untracked_count);
+        if is_dirty && is_present {
+            let repo_cfg = cfg.repos.iter().find(|r| r.name == name);
+            if let Some(r) = repo_cfg {
+                let p = r.resolved_path(&cfg);
+                let diff = git::git_diff_names(&p).unwrap_or_default();
+                for f in &diff {
+                    println!("    M {}", f);
                 }
             }
-            if let Some(ref ahead) = s.ahead {
+        }
+        if let Some(ahead) = s.get("ahead").and_then(|v| v.as_u64()) {
+            if ahead > 0 {
                 println!("  ahead: {}", ahead);
             }
-            if let Some(ref behind) = s.behind {
-                println!("  behind: {}", behind);
-            }
-            println!();
         }
+        println!();
     }
     Ok(())
 }
@@ -1201,47 +1243,58 @@ fn cmd_status(
 fn cmd_diff(repo: Option<&str>, staged: bool, json: bool) -> Result<(), String> {
     let cfg = config::find_and_load()?;
 
-    let target_repos: Vec<_> = if let Some(name) = repo {
-        vec![cfg
-            .repos
-            .iter()
-            .find(|r| r.name == name)
-            .ok_or_else(|| format!("Repo '{}' not found", name))?]
+    let explicit_nodes: Vec<String> = repo.map(|r| vec![r.to_string()]).unwrap_or_default();
+    let selection = if repo.is_some() {
+        exec::SelectionMode::Explicit
     } else {
-        cfg.repos.iter().collect()
+        exec::SelectionMode::All
     };
+
+    let scope = exec::ExecutionScope {
+        selection,
+        explicit_nodes,
+        closure: exec::ClosureMode::SelfOnly,
+        order: exec::OrderMode::Stable,
+    };
+
+    let steps = vec![exec::ExecutionStep {
+        id: "git-diff".to_string(),
+        mode: exec::ExecutionMode::ReadOnly,
+        kind: exec::StepKind::Builtin {
+            name: "git.diff".to_string(),
+            args: serde_json::json!({ "staged": staged }),
+        },
+        condition: None,
+    }];
+
+    let plan = exec::build_plan(&cfg, &scope, steps)?;
+    let opts = exec::RunOptions {
+        dry_run: false,
+        apply: false,
+        json: false,
+    };
+    let report = exec::run_plan(&cfg, &plan, &opts)?;
 
     let mut all_diffs: Vec<serde_json::Value> = Vec::new();
 
-    for r in &target_repos {
-        let path = r.resolved_path(&cfg);
-        if !path.join(".git").exists() {
-            continue;
-        }
-
-        let mut args = vec!["diff"];
-        if staged {
-            args.push("--cached");
-        }
-
-        let output = std::process::Command::new("git")
-            .args(&args)
-            .current_dir(&path)
-            .output()
-            .map_err(|e| format!("git diff: {}", e))?;
-
-        let diff_text = String::from_utf8_lossy(&output.stdout).to_string();
-        if diff_text.trim().is_empty() {
-            continue;
-        }
-
-        if json {
-            all_diffs.push(serde_json::json!({
-                "repo": r.name, "diff": diff_text
-            }));
-        } else {
-            println!("--- {} ---", r.name);
-            println!("{}", diff_text);
+    for nr in &report.node_results {
+        for sr in &nr.step_results {
+            if !sr.success {
+                eprintln!("{} diff failed: {}", nr.node, sr.stderr);
+                continue;
+            }
+            let diff_text = sr.stdout.trim().to_string();
+            if diff_text.is_empty() {
+                continue;
+            }
+            if json {
+                all_diffs.push(serde_json::json!({
+                    "repo": nr.node, "diff": diff_text
+                }));
+            } else {
+                println!("--- {} ---", nr.node);
+                println!("{}", diff_text);
+            }
         }
     }
 
@@ -1388,15 +1441,29 @@ fn cmd_dag(mode: Option<&str>, split: Option<&str>, json: bool) -> Result<(), St
 
 fn cmd_push(dry_run: bool, json_output: bool) -> Result<(), String> {
     let cfg = config::find_and_load()?;
-    let dag = graph::discover_graph(&cfg)?;
-    let order = dag.topological_order()?;
 
-    let mut to_push = Vec::new();
-    for node_id in &order {
-        let node = match dag.get_node(node_id) {
-            Some(n) => n,
-            None => continue,
-        };
+    let scope = exec::ExecutionScope {
+        selection: exec::SelectionMode::All,
+        explicit_nodes: Vec::new(),
+        closure: exec::ClosureMode::SelfOnly,
+        order: exec::OrderMode::ProvidersFirst,
+    };
+
+    let steps = vec![exec::ExecutionStep {
+        id: "git-push".to_string(),
+        mode: exec::ExecutionMode::Mutating,
+        kind: exec::StepKind::Builtin {
+            name: "git.push".to_string(),
+            args: serde_json::Value::Null,
+        },
+        condition: None,
+    }];
+
+    let plan = exec::build_plan(&cfg, &scope, steps)?;
+
+    // Filter nodes with commits ahead of remote
+    let mut to_push: Vec<(&exec::ExecutionNode, usize)> = Vec::new();
+    for node in &plan.nodes {
         if !node.path.join(".git").exists() {
             continue;
         }
@@ -1404,9 +1471,9 @@ fn cmd_push(dry_run: bool, json_output: bool) -> Result<(), String> {
         if remote.is_none() {
             continue;
         }
-        let ahead = git::git_ahead_count(&node.path, &node.branch, "origin").unwrap_or(0);
+        let ahead = git::git_ahead_count(&node.path, "", "").unwrap_or(0);
         if ahead > 0 {
-            to_push.push((node_id.clone(), node.name.clone(), ahead));
+            to_push.push((node, ahead));
         }
     }
 
@@ -1419,56 +1486,60 @@ fn cmd_push(dry_run: bool, json_output: bool) -> Result<(), String> {
         return Ok(());
     }
 
-    if json_output {
-        let nodes: Vec<serde_json::Value> = to_push
-            .iter()
-            .map(|(id, name, ahead)| serde_json::json!({"name": name, "id": id, "ahead": ahead}))
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "push_order": order.iter().filter(|id| to_push.iter().any(|(tid, _, _)| tid == *id)).collect::<Vec<_>>(),
-            "nodes": nodes
-        })).unwrap());
-        if dry_run {
-            return Ok(());
-        }
-    } else if dry_run {
-        println!("Would push (dependency order):");
-        for (_, name, ahead) in &to_push {
-            println!("  {} ({} ahead)", name, ahead);
+    if dry_run {
+        if json_output {
+            let nodes: Vec<serde_json::Value> = to_push
+                .iter()
+                .map(|(n, ahead)| serde_json::json!({"name": n.name, "ahead": ahead}))
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                "push_order": to_push.iter().map(|(n, _)| n.name.clone()).collect::<Vec<_>>(),
+                "nodes": nodes
+            })).unwrap());
+        } else {
+            println!("Would push (dependency order):");
+            for (node, ahead) in &to_push {
+                println!("  {} ({} ahead)", node.name, ahead);
+            }
         }
         return Ok(());
-    } else {
+    }
+
+    // Build a filtered plan with only nodes that have commits to push
+    let push_nodes: Vec<exec::ExecutionNode> = to_push.iter().map(|(n, _)| (*n).clone()).collect();
+    let push_plan = exec::ExecutionPlan { nodes: push_nodes };
+
+    let opts = exec::RunOptions {
+        dry_run: false,
+        apply: true,
+        json: json_output,
+    };
+
+    if !json_output {
         println!("Pushing (dependency order):");
     }
 
-    let mut results: BTreeMap<String, Result<(), String>> = BTreeMap::new();
-    for (node_id, name, _) in &to_push {
-        let node = dag
-            .get_node(node_id)
-            .ok_or_else(|| format!("Node '{}' not found", node_id))?;
-        if !json_output {
-            print!("  {}... ", name);
-        }
-        let result = git::git_push(&node.path, &node.branch);
-        if let Err(ref e) = result {
-            if !json_output {
-                println!("FAILED: {}", e);
-            }
-            results.insert(name.clone(), Err(e.clone()));
-            return Err(format!("Push failed for '{}': {}", name, e));
-        }
-        if !json_output {
-            println!("pushed");
-        }
-        results.insert(name.clone(), Ok(()));
-    }
+    let report = exec::run_plan(&cfg, &push_plan, &opts)?;
 
     if json_output {
+        let results: Vec<serde_json::Value> = report
+            .node_results
+            .iter()
+            .map(|nr| {
+                serde_json::json!({
+                    "name": nr.node,
+                    "success": nr.success,
+                    "error": nr.step_results.first().map(|sr| sr.stderr.clone()).filter(|e| !e.is_empty())
+                })
+            })
+            .collect();
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "pushed": results.iter().map(|(name, r)| {
-                serde_json::json!({"name": name, "success": r.is_ok(), "error": r.as_ref().err()})
-            }).collect::<Vec<_>>()
+            "pushed": results
         })).unwrap());
+    }
+
+    if report.failed_nodes > 0 {
+        return Err("Some pushes failed".to_string());
     }
 
     Ok(())
@@ -1510,7 +1581,7 @@ fn cmd_commit(
     dry_run: bool,
     json_output: bool,
     apply: bool,
-    force: bool,
+    _force: bool,
     resume_id: Option<&str>,
     messages_path: Option<&str>,
     write_template: bool,
@@ -1520,22 +1591,44 @@ fn cmd_commit(
     let cfg = config::find_and_load()?;
 
     if write_template {
-        let statuses = status::collect_all(&cfg)?;
+        let scope = exec::ExecutionScope {
+            selection: exec::SelectionMode::All,
+            explicit_nodes: Vec::new(),
+            closure: exec::ClosureMode::SelfOnly,
+            order: exec::OrderMode::Stable,
+        };
+        let steps = vec![exec::ExecutionStep {
+            id: "collect-status".to_string(),
+            mode: exec::ExecutionMode::ReadOnly,
+            kind: exec::StepKind::Builtin {
+                name: "git.collect-status".to_string(),
+                args: serde_json::Value::Null,
+            },
+            condition: None,
+        }];
+        let plan = exec::build_plan(&cfg, &scope, steps)?;
+        let opts = exec::RunOptions { dry_run: false, apply: false, json: false };
+        let report = exec::run_plan(&cfg, &plan, &opts)?;
+
         let mut template = serde_json::Map::new();
-        for s in &statuses {
-            if !s.is_dirty {
-                continue;
+        for nr in &report.node_results {
+            for sr in &nr.step_results {
+                if sr.success && !sr.stdout.is_empty() {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&sr.stdout) {
+                        let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                        let is_dirty = val.get("is_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
+                        if !is_dirty { continue; }
+                        let repo_cfg = cfg.repos.iter().find(|r| r.name == name);
+                        let diff = repo_cfg
+                            .map(|r| git::git_diff_names(&r.resolved_path(&cfg)).unwrap_or_default())
+                            .unwrap_or_default();
+                        template.insert(
+                            name.to_string(),
+                            serde_json::json!({ "subject": "", "body": "", "files": diff }),
+                        );
+                    }
+                }
             }
-            let repo_cfg = match cfg.repos.iter().find(|r| r.name == s.name) {
-                Some(r) => r,
-                None => continue,
-            };
-            let repo_path = repo_cfg.resolved_path(&cfg);
-            let diff = git::git_diff_names(&repo_path).unwrap_or_default();
-            template.insert(
-                s.name.clone(),
-                serde_json::json!({ "subject": "", "body": "", "files": diff }),
-            );
         }
         let cwd = std::env::current_dir().map_err(|e| format!("Cannot get cwd: {}", e))?;
         let msg_dir = cwd.join(".stitch");
@@ -1555,21 +1648,33 @@ fn cmd_commit(
         return Ok(());
     }
 
-    let dag = graph::discover_graph(&cfg)?;
-    let statuses = status::collect_all(&cfg)?;
-    let mut plan = sync::plan_local_commit(&dag, &statuses, &cfg)?;
+    let explicit_nodes: Vec<String> = repo.clone().map(|r| vec![r]).unwrap_or_default();
+    let selection = if repo.is_some() {
+        exec::SelectionMode::Explicit
+    } else {
+        exec::SelectionMode::Changed
+    };
 
-    if let Some(ref selected_repo) = repo {
-        plan.actions.retain(|action| action.node() == selected_repo);
-        plan.node_plans.retain(|node, _| node == selected_repo);
-        plan.affected_nodes.retain(|node| node == selected_repo);
-        plan.blocked_reasons
-            .retain(|reason| reason.starts_with(&format!("{}:", selected_repo)));
+    let scope = exec::ExecutionScope {
+        selection,
+        explicit_nodes: explicit_nodes.clone(),
+        closure: exec::ClosureMode::Connected,
+        order: exec::OrderMode::ProvidersFirst,
+    };
 
-        if plan.actions.is_empty() {
-            return Err(format!("Repo '{}' has no commit actions", selected_repo));
+    let raw_nodes = exec::build_scope(&cfg, &scope)?;
+    let dirty_nodes: Vec<&exec::ExecutionNode> = raw_nodes.iter().filter(|n| n.directly_changed).collect();
+
+    if dirty_nodes.is_empty() {
+        if json_output {
+            println!(r#"{{"commits": [], "message": "Nothing to commit"}}"#);
+        } else {
+            println!("Nothing to commit.");
         }
+        return Ok(());
     }
+
+    let _commit_names: std::collections::BTreeSet<String> = dirty_nodes.iter().map(|n| n.name.clone()).collect();
 
     let mut messages: Option<BTreeMap<String, String>> = if let Some(path) = messages_path {
         Some(load_commit_messages(path)?)
@@ -1577,79 +1682,115 @@ fn cmd_commit(
         None
     };
 
-    if repo.is_none() {
+    if let Some(r) = repo.as_ref() {
         if let Some(m) = message.clone() {
-            if plan.actions.len() != 1 {
-                return Err(
-                    "--message requires --repo when more than one repo has changes".to_string(),
-                );
-            }
-
-            let node = plan.actions[0].node().clone();
             let subject = m.trim();
-
             if subject.is_empty() {
                 return Err("--message must not be empty".to_string());
             }
-
             let msgs = messages.get_or_insert_with(BTreeMap::new);
-            msgs.insert(node, subject.to_string());
+            msgs.insert(r.clone(), subject.to_string());
+        }
+    } else {
+        if let Some(m) = message {
+            if dirty_nodes.len() != 1 {
+                return Err(
+                    "--message requires --repo when more than one repo has changes".to_string()
+                );
+            }
+            let subject = m.trim();
+            if subject.is_empty() {
+                return Err("--message must not be empty".to_string());
+            }
+            let msgs = messages.get_or_insert_with(BTreeMap::new);
+            msgs.insert(dirty_nodes[0].name.clone(), subject.to_string());
         }
     }
 
-    if let (Some(r), Some(m)) = (repo.clone(), message.clone()) {
-        let subject = m.trim();
-        if subject.is_empty() {
-            return Err("--message must not be empty".to_string());
+    // Build per-node commit steps with messages
+    let mut commit_nodes: Vec<exec::ExecutionNode> = Vec::new();
+    for node in dirty_nodes {
+        let has_message = messages
+            .as_ref()
+            .and_then(|m| m.get(&node.name))
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+
+        if !has_message && !dry_run {
+            return Err(format!(
+                "Missing explicit commit message for '{}'. Use --messages or --repo <name> -m <message>.",
+                node.name
+            ));
         }
 
-        let msgs = messages.get_or_insert_with(BTreeMap::new);
-        msgs.insert(r, subject.to_string());
+        let msg = messages
+            .as_ref()
+            .and_then(|m| m.get(&node.name))
+            .cloned()
+            .unwrap_or_default();
+
+        let mut n = node.clone();
+        n.steps = vec![exec::ExecutionStep {
+            id: "git-commit".to_string(),
+            mode: exec::ExecutionMode::Mutating,
+            kind: exec::StepKind::Builtin {
+                name: "git.commit".to_string(),
+                args: serde_json::json!({"message": msg, "stage": true}),
+            },
+            condition: None,
+        }];
+        commit_nodes.push(n);
     }
 
-    if dry_run {
-        println!("{}", sync::format_plan_output(&plan, json_output));
+    if commit_nodes.is_empty() {
+        if json_output {
+            println!(r#"{{"commits": [], "message": "Nothing to commit"}}"#);
+        } else {
+            println!("Nothing to commit.");
+        }
         return Ok(());
     }
 
-    if !plan.blocked_reasons.is_empty() && !force {
-        println!("{}", sync::format_plan_output(&plan, json_output));
-        return Err("Commit blocked. Use --force to override or fix the issues.".to_string());
-    }
+    let plan = exec::ExecutionPlan { nodes: commit_nodes };
 
-    if plan.actions.is_empty() {
-        println!("Nothing to commit.");
+    if dry_run {
+        exec::print_plan(&plan, json_output);
         return Ok(());
     }
 
     if !apply {
-        println!("{}", sync::format_plan_output(&plan, json_output));
+        exec::print_plan(&plan, json_output);
         return Err("Set --apply to execute the commit, or use --dry-run to preview.".to_string());
     }
 
-    {
-        let provided = messages.as_ref();
+    let opts = exec::RunOptions {
+        dry_run: false,
+        apply: true,
+        json: json_output,
+    };
 
-        for action in &plan.actions {
-            let node = action.node();
+    let report = exec::run_plan(&cfg, &plan, &opts)?;
 
-            let has_message = provided
-                .and_then(|m| m.get(node))
-                .map(|s| !s.trim().is_empty())
-                .unwrap_or(false);
-
-            if !has_message {
-                return Err(format!(
-                    "Missing explicit commit message for '{}'. Use --messages or --repo <name> -m <message>.",
-                    node
-                ));
-            }
-        }
+    if json_output {
+        let results: Vec<serde_json::Value> = report
+            .node_results
+            .iter()
+            .map(|nr| {
+                serde_json::json!({
+                    "name": nr.node,
+                    "success": nr.success,
+                    "error": nr.step_results.first().map(|sr| sr.stderr.clone()).filter(|e| !e.is_empty())
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "committed": results
+        })).unwrap());
     }
 
-    let result = sync::execute_local_commit_plan(&plan, &dag, &cfg, messages.as_ref(), force)?;
-
-    println!("{}", sync::format_result_output(&result, json_output));
+    if report.failed_nodes > 0 {
+        return Err("Some commits failed".to_string());
+    }
 
     Ok(())
 }
@@ -1660,33 +1801,151 @@ fn cmd_sync(
     dry_run: bool,
     json_output: bool,
     no_push: bool,
-    _repos: &[String],
-    _run_tend: bool,
+    repos: &[String],
+    run_tend: bool,
 ) -> Result<(), String> {
     let _mode = mode.unwrap_or("push");
     let cfg = config::find_and_load()?;
-    let dag = graph::discover_graph(&cfg)?;
-    let statuses = status::collect_all(&cfg)?;
-    let mut plan = sync::plan_sync(&dag, &statuses, &cfg)?;
-    plan.actions
-        .retain(|a| !matches!(a, sync::Action::Commit { .. }));
 
-    if dry_run {
-        println!("{}", sync::format_plan_output(&plan, json_output));
+    let explicit_nodes: Vec<String> = if repos.is_empty() {
+        Vec::new()
+    } else {
+        for name in repos {
+            if !cfg.repos.iter().any(|r| r.name == *name) {
+                return Err(format!("Unknown repo '{name}'"));
+            }
+        }
+        repos.to_vec()
+    };
+
+    let selection = if !explicit_nodes.is_empty() {
+        exec::SelectionMode::Explicit
+    } else {
+        exec::SelectionMode::Changed
+    };
+
+    let scope = exec::ExecutionScope {
+        selection,
+        explicit_nodes,
+        closure: exec::ClosureMode::Connected,
+        order: exec::OrderMode::ProvidersFirst,
+    };
+
+    let raw_nodes = exec::build_scope(&cfg, &scope)?;
+    let dirty_nodes: Vec<&exec::ExecutionNode> = raw_nodes
+        .iter()
+        .filter(|n| n.directly_changed || n.downstream_only)
+        .collect();
+
+    if dirty_nodes.is_empty() {
+        if json_output {
+            println!(r#"{{"synced": [], "message": "Nothing to sync"}}"#);
+        } else {
+            println!("Nothing to sync.");
+        }
         return Ok(());
     }
 
-    if plan.actions.is_empty() {
-        println!("Nothing to sync.");
+    // Build per-node sync steps: update inputs + tend check + push
+    let mut sync_nodes: Vec<exec::ExecutionNode> = Vec::new();
+    for node in dirty_nodes {
+        let mut steps: Vec<exec::ExecutionStep> = Vec::new();
+
+        // Update flake lock inputs (only for nodes with lockfiles)
+        if node.path.join("flake.lock").exists() {
+            steps.push(exec::ExecutionStep {
+                id: "update-inputs".to_string(),
+                mode: exec::ExecutionMode::Mutating,
+                kind: exec::StepKind::Builtin {
+                    name: "nix.updateInputs".to_string(),
+                    args: serde_json::Value::Null,
+                },
+                condition: Some(exec::StepCondition::HasLockfile),
+            });
+        }
+
+        // Run tend checks
+        if run_tend {
+            steps.push(exec::ExecutionStep {
+                id: "tend-check".to_string(),
+                mode: exec::ExecutionMode::ReadOnly,
+                kind: exec::StepKind::Builtin {
+                    name: "tend.check".to_string(),
+                    args: serde_json::json!({"profile": "pre-push", "affected_dag": true}),
+                },
+                condition: Some(exec::StepCondition::DirectlyChanged),
+            });
+        }
+
+        // Push (unless --no-push)
+        if !no_push {
+            steps.push(exec::ExecutionStep {
+                id: "git-push".to_string(),
+                mode: exec::ExecutionMode::Mutating,
+                kind: exec::StepKind::Builtin {
+                    name: "git.push".to_string(),
+                    args: serde_json::Value::Null,
+                },
+                condition: Some(exec::StepCondition::DirectlyChanged),
+            });
+        }
+
+        if !steps.is_empty() {
+            let mut n = node.clone();
+            n.steps = steps;
+            sync_nodes.push(n);
+        }
+    }
+
+    if sync_nodes.is_empty() {
+        if json_output {
+            println!(r#"{{"synced": [], "message": "Nothing to sync"}}"#);
+        } else {
+            println!("Nothing to sync.");
+        }
+        return Ok(());
+    }
+
+    let plan = exec::ExecutionPlan { nodes: sync_nodes };
+
+    if dry_run {
+        exec::print_plan(&plan, json_output);
         return Ok(());
     }
 
     if !apply {
-        println!("{}", sync::format_plan_output(&plan, json_output));
+        exec::print_plan(&plan, json_output);
         return Err("Set --apply to execute the sync, or use --dry-run to preview.".to_string());
     }
 
-    let result = sync::execute_sync(&plan, &dag, &cfg, no_push, None, false)?;
-    println!("{}", sync::format_result_output(&result, json_output));
+    let opts = exec::RunOptions {
+        dry_run: false,
+        apply: true,
+        json: json_output,
+    };
+
+    let report = exec::run_plan(&cfg, &plan, &opts)?;
+
+    if json_output {
+        let results: Vec<serde_json::Value> = report
+            .node_results
+            .iter()
+            .map(|nr| {
+                serde_json::json!({
+                    "name": nr.node,
+                    "success": nr.success,
+                    "error": nr.step_results.first().map(|sr| sr.stderr.clone()).filter(|e| !e.is_empty())
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "synced": results
+        })).unwrap());
+    }
+
+    if report.failed_nodes > 0 {
+        return Err("Some sync operations failed".to_string());
+    }
+
     Ok(())
 }

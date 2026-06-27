@@ -8,6 +8,17 @@ use crate::exec::{
     RunOptions, SelectionMode, StepKind,
 };
 
+const KNOWN_BUILTINS: &[&str] = &[
+    "git.status",
+    "git.collect-status",
+    "git.diff",
+    "git.commit",
+    "git.push",
+    "tend.check",
+    "nix.updateInputs",
+    "hooks.install",
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecipeCollection {
     pub version: u32,
@@ -102,6 +113,14 @@ pub fn resolve_recipe(recipe: &RecipeDef) -> Result<RecipeResolved, String> {
                 argv: run.clone(),
             }
         } else if let Some(ref builtin) = step_def.builtin {
+            if !KNOWN_BUILTINS.contains(&builtin.as_str()) {
+                return Err(format!(
+                    "Step '{}': unknown built-in '{}'. Known built-ins: {}",
+                    step_def.id,
+                    builtin,
+                    KNOWN_BUILTINS.join(", ")
+                ));
+            }
             let args = step_def.args.clone().unwrap_or(serde_json::Value::Null);
             StepKind::Builtin {
                 name: builtin.clone(),
@@ -289,8 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_recipe_unknown_builtin_resolves_ok() {
-        // The builtin name validation happens at execution time, not resolution
+    fn test_resolve_recipe_unknown_builtin_fails() {
         let recipe = RecipeDef {
             name: "bad-builtin".to_string(),
             mode: "readonly".to_string(),
@@ -305,8 +323,10 @@ mod tests {
                 args: None,
             }],
         };
-        let resolved = resolve_recipe(&recipe).unwrap();
-        assert_eq!(resolved.steps.len(), 1);
+        let result = resolve_recipe(&recipe);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("unknown built-in") || err.contains("unknown.builtin"));
     }
 
     #[test]

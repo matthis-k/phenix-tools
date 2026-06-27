@@ -177,57 +177,36 @@ pub fn parse_condition(s: &str) -> Result<StepCondition, String> {
     }
 }
 
-fn load_topology(cfg: &WorkspaceConfig) -> BTreeMap<String, (u32, String)> {
+fn load_topology(cfg: &WorkspaceConfig) -> Result<BTreeMap<String, (u32, String)>, String> {
     let root = cfg.config_dir.as_deref().unwrap_or(Path::new("."));
     let topo_path = root.join(".stitch").join("topology.json");
     if !topo_path.exists() {
-        return BTreeMap::new();
+        return Ok(BTreeMap::new());
     }
-    let content = match std::fs::read_to_string(&topo_path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("WARNING: failed to read {}: {e}", topo_path.display());
-            return BTreeMap::new();
-        }
-    };
-    let val: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("WARNING: failed to parse {}: {e}", topo_path.display());
-            return BTreeMap::new();
-        }
-    };
-    let repos = match val.get("repos").and_then(|v| v.as_array()) {
-        Some(r) => r,
-        None => {
-            eprintln!("WARNING: topology file {} missing 'repos' array", topo_path.display());
-            return BTreeMap::new();
-        }
-    };
+    let content = std::fs::read_to_string(&topo_path)
+        .map_err(|e| format!("Failed to read topology {}: {e}", topo_path.display()))?;
+    let val: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse topology {}: {e}", topo_path.display()))?;
+    let repos = val.get("repos").and_then(|v| v.as_array())
+        .ok_or_else(|| format!("Topology file {} missing 'repos' array", topo_path.display()))?;
 
     if repos.is_empty() {
-        eprintln!("WARNING: topology file {} has empty 'repos' array", topo_path.display());
-        return BTreeMap::new();
+        return Err(format!("Topology file {} has empty 'repos' array", topo_path.display()));
     }
 
     let mut topo = BTreeMap::new();
     for repo in repos {
-        let name = match repo.get("name").and_then(|v| v.as_str()) {
-            Some(n) => n.to_string(),
-            None => {
-                eprintln!("WARNING: topology entry missing 'name' field, skipping");
-                continue;
-            }
-        };
+        let name = repo.get("name").and_then(|v| v.as_str())
+            .ok_or_else(|| format!("Topology entry in {} missing 'name' field", topo_path.display()))?;
         let role = repo
             .get("role")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
         let layer = repo.get("layer").and_then(|v| v.as_u64()).unwrap_or(999) as u32;
-        topo.insert(name, (layer, role));
+        topo.insert(name.to_string(), (layer, role));
     }
-    topo
+    Ok(topo)
 }
 
 fn is_node_dirty(path: &Path) -> bool {
@@ -467,7 +446,7 @@ pub fn build_scope(
     cfg: &WorkspaceConfig,
     scope: &ExecutionScope,
 ) -> Result<Vec<ExecutionNode>, String> {
-    let topo = load_topology(cfg);
+    let topo = load_topology(cfg)?;
     let config_order = config_order(cfg);
     let all_names: Vec<String> = cfg.repos.iter().map(|r| r.name.clone()).collect();
     let statuses = status::collect_all(cfg)?;
@@ -555,11 +534,9 @@ pub fn build_scope(
             .ok_or_else(|| format!("Node '{name}' not found in config"))?;
         let path = repo.resolved_path(cfg);
         let layer = topo.get(&name).cloned().unwrap_or((999, String::new()));
-        let status = statuses.iter().find(|s| s.name == name);
+        let _status = statuses.iter().find(|s| s.name == name);
         let directly_selected = selected_set.contains(&name);
         let directly_changed = changed_set.contains(&name);
-        let is_dirty = status.map(|s| s.is_dirty).unwrap_or(false) || is_node_dirty(&path);
-        let has_files = changed_set.contains(&name) || is_dirty;
 
         result.push(ExecutionNode {
             name,
@@ -568,7 +545,7 @@ pub fn build_scope(
             layer: layer.0,
             directly_selected,
             directly_changed,
-            downstream_only: !directly_selected && has_files,
+            downstream_only: !directly_selected && !directly_changed,
             steps: Vec::new(),
         });
     }
@@ -765,6 +742,7 @@ fn execute_step(node: &ExecutionNode, step: &ExecutionStep, cfg: &WorkspaceConfi
 fn run_builtin(node: &ExecutionNode, cfg: &WorkspaceConfig, name: &str, args: &serde_json::Value) -> StepResult {
     match name {
         "git.status" => builtin_git_status(node),
+        "git.collect-status" => builtin_git_collect_status(node, cfg),
         "git.diff" => builtin_git_diff(node, args),
         "git.commit" => builtin_git_commit(node, args, cfg),
         "git.push" => builtin_git_push(node, args),
@@ -800,6 +778,74 @@ fn builtin_git_status(node: &ExecutionNode) -> StepResult {
             success: false,
             stdout: String::new(),
             stderr: format!("git status failed: {e}"),
+        },
+    }
+}
+
+fn builtin_git_collect_status(node: &ExecutionNode, _cfg: &WorkspaceConfig) -> StepResult {
+    use crate::git::GitRepo;
+    let repo_path = &node.path;
+    if !repo_path.join(".git").exists() {
+        let status = serde_json::json!({
+            "name": node.name,
+            "path": repo_path.display().to_string(),
+            "branch": "",
+            "is_dirty": false,
+            "is_present": false,
+            "staged_count": 0,
+            "unstaged_count": 0,
+            "untracked_count": 0,
+        });
+        return StepResult {
+            node: node.name.clone(),
+            step_id: "builtin:git.collect-status".to_string(),
+            success: true,
+            stdout: status.to_string(),
+            stderr: String::new(),
+        };
+    }
+    match GitRepo::open(repo_path) {
+        Ok(repo) => match repo.status() {
+            Ok(git_status) => {
+                let branch = git_status.branch.clone();
+                let is_dirty = git_status.is_dirty();
+                let staged_count = git_status.staged_count();
+                let unstaged_count = git_status.unstaged_count();
+                let untracked_count = git_status.untracked_count();
+                let ahead = repo.ahead_count().unwrap_or(0);
+                let status = serde_json::json!({
+                    "name": node.name,
+                    "path": repo_path.display().to_string(),
+                    "branch": branch,
+                    "is_dirty": is_dirty,
+                    "is_present": true,
+                    "staged_count": staged_count,
+                    "unstaged_count": unstaged_count,
+                    "untracked_count": untracked_count,
+                    "ahead": ahead,
+                });
+                StepResult {
+                    node: node.name.clone(),
+                    step_id: "builtin:git.collect-status".to_string(),
+                    success: true,
+                    stdout: status.to_string(),
+                    stderr: String::new(),
+                }
+            }
+            Err(e) => StepResult {
+                node: node.name.clone(),
+                step_id: "builtin:git.collect-status".to_string(),
+                success: false,
+                stdout: String::new(),
+                stderr: format!("git.collect-status: {e}"),
+            },
+        },
+        Err(e) => StepResult {
+            node: node.name.clone(),
+            step_id: "builtin:git.collect-status".to_string(),
+            success: false,
+            stdout: String::new(),
+            stderr: format!("git.collect-status: {e}"),
         },
     }
 }
@@ -981,7 +1027,7 @@ fn builtin_tend_check(node: &ExecutionNode, args: &serde_json::Value) -> StepRes
 fn builtin_nix_update_inputs(
     node: &ExecutionNode,
     _args: &serde_json::Value,
-    _cfg: &WorkspaceConfig,
+    cfg: &WorkspaceConfig,
 ) -> StepResult {
     let lock_path = node.path.join("flake.lock");
     if !lock_path.exists() {
@@ -1020,25 +1066,76 @@ fn builtin_nix_update_inputs(
         }
     };
 
-    let nodes = lock_val.get("nodes");
-    let root = nodes
+    // Determine which inputs are upstream providers in the workspace DAG
+    let graph = build_simple_graph(cfg);
+    let deps = graph.1; // node -> providers
+    let upstream_names: std::collections::BTreeSet<String> = deps
+        .get(&node.name)
+        .map(|providers| {
+            let mut result: std::collections::BTreeSet<String> = providers.iter().cloned().collect();
+            let mut queue = providers.clone();
+            while let Some(provider) = queue.pop() {
+                if let Some(transitive) = deps.get(&provider) {
+                    for t in transitive {
+                        if result.insert(t.clone()) {
+                            queue.push(t.clone());
+                        }
+                    }
+                }
+            }
+            result
+        })
+        .unwrap_or_default();
+
+    // Build a reverse map from upstream repo path -> upstream name for path matching
+    let root_dir = cfg.config_dir.as_deref().unwrap_or(Path::new("."));
+    let mut upstream_paths: Vec<(String, PathBuf)> = Vec::new();
+    for uname in &upstream_names {
+        if let Some(repo) = cfg.repos.iter().find(|r| r.name == *uname) {
+            upstream_paths.push((uname.clone(), repo.resolved_path(cfg)));
+        }
+    }
+
+    // Parse lock file root.inputs to find which inputs reference upstream workspace nodes
+    let root_inputs = lock_val
+        .get("nodes")
         .and_then(|n| n.get("root"))
         .and_then(|r| r.get("inputs"))
         .and_then(|i| i.as_object());
+    let lock_nodes = lock_val.get("nodes").and_then(|n| n.as_object());
 
-    let input_names: Vec<String> = match root {
-        Some(inputs) => inputs
+    let input_names: Vec<String> = match (root_inputs, lock_nodes) {
+        (Some(inputs), Some(lnodes)) => inputs
             .keys()
-            .filter_map(|k| {
-                let input = nodes.and_then(|_n| inputs.get(k));
-                input
-                    .and_then(|i| i.as_object())
-                    .and_then(|obj| obj.get("inputs"))
-                    .and_then(|_| Some(k.clone()))
-                    .or_else(|| Some(k.clone()))
+            .filter(|input_name| {
+                // Fast path: input name directly matches an upstream node name
+                if upstream_names.contains(*input_name) {
+                    return true;
+                }
+                // Fallback: check lock file node's original path against upstream paths
+                if let Some(node_ref) = inputs.get(*input_name).and_then(|v| v.as_str()) {
+                    if upstream_names.contains(node_ref) {
+                        return true;
+                    }
+                    if let Some(node_entry) = lnodes.get(node_ref) {
+                        if let Some(original) = node_entry.get("original") {
+                            if let Some(path_str) = original.get("path").and_then(|v| v.as_str()) {
+                                let input_rel = Path::new(path_str);
+                                if input_rel.is_relative() {
+                                    let input_abs = root_dir.join(input_rel);
+                                    return upstream_paths.iter().any(|(_, rp)| {
+                                        *rp == input_abs
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                false
             })
+            .cloned()
             .collect(),
-        None => Vec::new(),
+        _ => Vec::new(),
     };
 
     if input_names.is_empty() {
@@ -1046,7 +1143,10 @@ fn builtin_nix_update_inputs(
             node: node.name.clone(),
             step_id: "builtin:nix.updateInputs".to_string(),
             success: true,
-            stdout: "No flake inputs found".to_string(),
+            stdout: format!(
+                "No upstream inputs to update (node has {} provider(s))",
+                upstream_names.len()
+            ),
             stderr: String::new(),
         };
     }
@@ -1074,7 +1174,7 @@ fn builtin_nix_update_inputs(
             node: node.name.clone(),
             step_id: "builtin:nix.updateInputs".to_string(),
             success: true,
-            stdout: format!("Updated inputs: {}", successes.join(", ")),
+            stdout: format!("Updated upstream inputs: {}", successes.join(", ")),
             stderr: String::new(),
         }
     } else {
@@ -1091,7 +1191,7 @@ fn builtin_nix_update_inputs(
 fn builtin_hooks_install(
     node: &ExecutionNode,
     args: &serde_json::Value,
-    _cfg: &WorkspaceConfig,
+    cfg: &WorkspaceConfig,
 ) -> StepResult {
     let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
     let managed_marker = "# managed-by: phenix-stitch-hooks";
@@ -1108,22 +1208,30 @@ fn builtin_hooks_install(
     }
 
     let is_root = node.name == "phenix";
+    let root = cfg.config_dir.as_deref().unwrap_or(Path::new("."));
 
-    let hooks = [
-        ("pre-commit", {
-            if is_root {
-                "nix develop .#default --command tend check --profile git-hook --staged --affected-dag"
-            } else {
-                "nix develop <workspace-root>#default --command tend check --root <submodule-path> --profile git-hook --staged"
-            }
-        }),
-        ("pre-push", {
-            if is_root {
-                "nix develop .#default --command tend check --profile pre-push --affected-dag"
-            } else {
-                "nix develop <workspace-root>#default --command tend check --root <submodule-path> --profile pre-push"
-            }
-        }),
+    let pre_commit_cmd: String = if is_root {
+        "nix develop .#default --command tend check --profile git-hook --staged --affected-dag".to_string()
+    } else {
+        format!(
+            "nix develop {root}/#default --command tend check --root {sub} --profile git-hook --staged",
+            root = root.display(),
+            sub = node.path.strip_prefix(root).unwrap_or(&node.path).display()
+        )
+    };
+    let pre_push_cmd: String = if is_root {
+        "nix develop .#default --command tend check --profile pre-push --affected-dag".to_string()
+    } else {
+        format!(
+            "nix develop {root}/#default --command tend check --root {sub} --profile pre-push",
+            root = root.display(),
+            sub = node.path.strip_prefix(root).unwrap_or(&node.path).display()
+        )
+    };
+
+    let hooks: [(&str, &str); 2] = [
+        ("pre-commit", &pre_commit_cmd),
+        ("pre-push", &pre_push_cmd),
     ];
 
     for (hook_name, hook_cmd) in &hooks {
@@ -1156,24 +1264,13 @@ fn builtin_hooks_install(
             };
         }
 
-        let resolved_cmd = if is_root {
-            hook_cmd.to_string()
-        } else {
-            // TODO: resolve workspace root and submodule path properly
-            hook_cmd
-                .replace("<workspace-root>", "..")
-                .replace("<submodule-path>", ".")
-        };
-        let non_interpolated = hook_cmd.to_string();
-
-        #[allow(unused_assignments)]
         let content = format!(
             r"#!/usr/bin/env bash
 # managed-by: phenix-stitch-hooks
 # Source: stitch hooks install
 # Do not edit manually.
 
-{resolved_cmd}
+{hook_cmd}
 "
         );
 
@@ -1186,8 +1283,6 @@ fn builtin_hooks_install(
                 stderr: format!("Failed to write {hook_path:?}"),
             };
         }
-        #[allow(unused_variables)]
-        let _ = non_interpolated;
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755));
     }
