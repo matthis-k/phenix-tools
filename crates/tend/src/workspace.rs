@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::discover;
@@ -61,30 +61,31 @@ pub fn parse_gitmodules(root: &Path) -> Result<Vec<Submodule>, String> {
     Ok(submodules)
 }
 
-pub fn parse_topology(root: &Path) -> Vec<TopoNode> {
+pub fn parse_topology(root: &Path) -> Result<Vec<TopoNode>, String> {
     let topo_path = root.join(".stitch").join("topology.json");
     if !topo_path.exists() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let content = match std::fs::read_to_string(&topo_path) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-    let val: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
-    };
-    let repos = match val.get("repos").and_then(|v| v.as_array()) {
-        Some(r) => r,
-        None => return Vec::new(),
-    };
+    let content = std::fs::read_to_string(&topo_path)
+        .map_err(|e| format!("Failed to read topology: {e}"))?;
+    let val: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse topology JSON: {e}"))?;
+    let repos = val
+        .get("repos")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            format!(
+                "Malformed topology: missing 'repos' array in {}",
+                topo_path.display()
+            )
+        })?;
 
     let mut topo = Vec::new();
     for repo in repos {
-        let name = match repo.get("name").and_then(|v| v.as_str()) {
-            Some(n) => n,
-            None => continue,
-        };
+        let name = repo
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "Topology entry missing 'name' field".to_string())?;
         let role = repo
             .get("role")
             .and_then(|v| v.as_str())
@@ -97,7 +98,14 @@ pub fn parse_topology(root: &Path) -> Vec<TopoNode> {
         });
     }
 
-    topo
+    if topo.is_empty() {
+        return Err(format!(
+            "Topology file {} has 'repos' array but it is empty",
+            topo_path.display()
+        ));
+    }
+
+    Ok(topo)
 }
 
 pub fn get_changed_files(root: &Path) -> Result<Vec<String>, String> {
@@ -187,13 +195,21 @@ pub fn run_affected_dag(
     profile: Option<&str>,
 ) -> Result<i32, String> {
     let submodules = parse_gitmodules(root)?;
-    let topology = parse_topology(root);
+    let topology = parse_topology(root)?;
     let changed_root_files = get_changed_files(root)?;
     let changed_gitlinks = get_changed_gitlinks(root)?;
 
     let mut affected: BTreeSet<String> = BTreeSet::new();
 
-    affected.insert("root".to_string());
+    // Determine directly affected nodes
+    let root_files_changed = changed_root_files.iter().any(|f| {
+        // Check if the file change is a root-local file (not inside any submodule)
+        !submodules.iter().any(|s| f.starts_with(&s.path) || f == &s.path)
+    });
+
+    if root_files_changed {
+        affected.insert("phenix".to_string());
+    }
 
     for sub in &submodules {
         let gitlink_changed = changed_gitlinks.iter().any(|g| g == &sub.path);
@@ -209,17 +225,24 @@ pub fn run_affected_dag(
         }
     }
 
+    // Expand downstream via topology DAG (higher-layer consumers of affected nodes)
     if !topology.is_empty() {
-        let topo_by_name: std::collections::BTreeMap<&str, u32> = topology
+        let topo_by_name: BTreeMap<&str, u32> = topology
             .iter()
             .map(|t| (t.name.as_str(), t.layer))
             .collect();
 
         let mut to_process: Vec<String> = affected.iter().cloned().collect();
         while let Some(name) = to_process.pop() {
-            let layer = topo_by_name.get(name.as_str()).copied().unwrap_or(0);
-            for (topo_name, topo_layer) in &topo_by_name {
-                if *topo_layer > layer && !affected.contains(*topo_name) {
+            let current_layer = match topo_by_name.get(name.as_str()) {
+                Some(&l) => l,
+                None => {
+                    eprintln!("WARNING: Affected node '{name}' not found in topology (layer unknown)");
+                    continue;
+                }
+            };
+            for (topo_name, &topo_layer) in &topo_by_name {
+                if topo_layer > current_layer && !affected.contains(*topo_name) {
                     affected.insert((*topo_name).to_string());
                     to_process.push((*topo_name).to_string());
                 }
@@ -227,14 +250,28 @@ pub fn run_affected_dag(
         }
     }
 
+    if affected.is_empty() {
+        println!("No affected workspace nodes.");
+        return Ok(0);
+    }
+
     let mut any_failed = false;
     for sub in &submodules {
-        if affected.contains(&sub.name) && !root.join(&sub.path).join(".tend.json").exists() {
-            eprintln!(
-                "ERROR: Affected submodule '{}' ({}) has no .tend.json",
-                sub.name, sub.path
-            );
-            any_failed = true;
+        if affected.contains(&sub.name) {
+            let sub_full = root.join(&sub.path);
+            if !sub_full.join(".git").exists() {
+                eprintln!(
+                    "ERROR: Affected submodule '{}' ({}) is not initialized (no .git)",
+                    sub.name, sub.path
+                );
+                any_failed = true;
+            } else if !sub_full.join(".tend.json").exists() {
+                eprintln!(
+                    "ERROR: Affected submodule '{}' ({}) has no .tend.json",
+                    sub.name, sub.path
+                );
+                any_failed = true;
+            }
         }
     }
     if any_failed {
@@ -250,22 +287,24 @@ pub fn run_affected_dag(
     let mut global_failed = false;
 
     for name in &affected {
-        let node_path = if *name == "root" || *name == "phenix" {
+        let node_path = if name == "phenix" {
             root.to_path_buf()
         } else if let Some(sub) = submodules.iter().find(|s| s.name == *name) {
             root.join(&sub.path)
         } else {
+            eprintln!("WARNING: Node '{name}' has no matching submodule path; skipping");
             continue;
         };
 
-        if !node_path.join(".tend.json").exists() {
+        if name != "phenix" && !node_path.join(".tend.json").exists() {
             eprintln!("SKIPPED: '{name}' (no .tend.json)");
             global_failed = true;
             continue;
         }
 
-        if !node_path.join(".git").exists() && *name != "root" && *name != "phenix" {
-            println!("Skipping uninitialized submodule '{name}'");
+        if name != "phenix" && !node_path.join(".git").exists() {
+            eprintln!("ERROR: '{name}' has no .git directory (uninitialized submodule)");
+            global_failed = true;
             continue;
         }
 

@@ -1,12 +1,15 @@
 #![allow(clippy::too_many_arguments)]
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use clap::{Parser, Subcommand};
 
 use stitch::config;
+use stitch::exec;
 use stitch::git;
 use stitch::graph;
+use stitch::recipe;
 use stitch::status;
 use stitch::sync;
 
@@ -68,6 +71,57 @@ fn main() {
         Commands::Graph { command } => cmd_graph(command),
         Commands::Topology { command } => cmd_topology(command),
         Commands::Hooks { command } => cmd_hooks(command),
+        Commands::Exec {
+            all: all_flag,
+            changed,
+            dirty,
+            node,
+            nodes,
+            closure,
+            order,
+            mode,
+            step,
+            dry_run,
+            apply,
+            json,
+            trailing_command,
+        } => cmd_exec(
+            *all_flag,
+            *changed,
+            *dirty,
+            node.as_deref(),
+            nodes,
+            closure,
+            order,
+            mode,
+            step,
+            *dry_run,
+            *apply,
+            *json,
+            trailing_command,
+        ),
+        Commands::Verify {
+            node,
+            nodes,
+            all: all_flag,
+            changed,
+            dirty,
+            upstream,
+            downstream,
+            dry_run,
+            json,
+        } => cmd_verify(
+            node.as_deref(),
+            nodes,
+            *all_flag,
+            *changed,
+            *dirty,
+            *upstream,
+            *downstream,
+            *dry_run,
+            *json,
+        ),
+        Commands::Recipe { command } => cmd_recipe(command),
         Commands::Changeset { command } => cmd_changeset(command),
     };
 
@@ -229,57 +283,415 @@ fn cmd_topology(command: &TopologyCommand) -> Result<(), String> {
 }
 
 fn cmd_hooks(command: &HooksCommand) -> Result<(), String> {
+    let managed_marker = "# managed-by: phenix-stitch-hooks";
+
     match command {
-        HooksCommand::Install { all: true } => {
+        HooksCommand::Plan { all, repo } => {
             let cfg = config::find_and_load()?;
+            let targets: Vec<_> = if let Some(name) = repo {
+                let r = cfg.repos.iter().find(|r| r.name == *name)
+                    .ok_or_else(|| format!("Repo '{}' not found", name))?;
+                vec![r]
+            } else if *all {
+                cfg.repos.iter().collect()
+            } else {
+                return Err("Use --all or --repo to specify repos for hook plan".to_string());
+            };
+
+            println!("Hook plan:");
+            for repo in &targets {
+                let repo_path = repo.resolved_path(&cfg);
+                let hooks_dir = repo_path.join(".git").join("hooks");
+                if !hooks_dir.exists() {
+                    println!("  {}: no .git/hooks", repo.name);
+                    continue;
+                }
+                let is_root = repo.name == "phenix";
+                for hook_name in &["pre-commit", "pre-push"] {
+                    let hook_path = hooks_dir.join(hook_name);
+                    let status = if hook_path.exists() {
+                        let existing = std::fs::read_to_string(&hook_path).unwrap_or_default();
+                        if existing.contains(managed_marker) {
+                            "managed (will overwrite)"
+                        } else {
+                            "unmanaged (will NOT overwrite unless --force)"
+                        }
+                    } else {
+                        "absent (will create)"
+                    };
+                    println!("  {} {}: {}", repo.name, hook_name, status);
+                    if is_root {
+                        println!("    -> includes --affected-dag");
+                    } else {
+                        println!("    -> no --affected-dag (submodule-local)");
+                    }
+                }
+            }
+            Ok(())
+        }
+        HooksCommand::Install { all, repo, force } => {
+            let cfg = config::find_and_load()?;
+            let targets: Vec<_> = if let Some(name) = repo {
+                vec![cfg.repos.iter().find(|r| r.name == *name)
+                    .ok_or_else(|| format!("Repo '{}' not found", name))?]
+            } else if *all {
+                cfg.repos.iter().collect()
+            } else {
+                return Err("Use --all or --repo to install hooks".to_string());
+            };
+
+            let root = cfg.config_dir.as_deref().unwrap_or(Path::new("."));
             let mut installed = 0usize;
-            for repo in &cfg.repos {
+
+            for repo in &targets {
                 let repo_path = repo.resolved_path(&cfg);
                 let hooks_dir = repo_path.join(".git").join("hooks");
                 if !hooks_dir.exists() {
                     println!("Skipping {} (no .git/hooks)", repo.name);
                     continue;
                 }
-                install_hook(
-                    &hooks_dir,
-                    "pre-commit",
-                    "tend check --profile git-hook --staged",
-                )?;
-                install_hook(
-                    &hooks_dir,
-                    "pre-push",
-                    "tend check --profile pre-push --affected-dag",
-                )?;
+
+                let is_root = repo.name == "phenix";
+
+                let hooks = [
+                    ("pre-commit", {
+                        if is_root {
+                            "nix develop .#default --command tend check --profile git-hook --staged --affected-dag"
+                        } else {
+                            &format!(
+                                "nix develop {root}/#default --command tend check --root {sub} --profile git-hook --staged",
+                                root = root.display(),
+                                sub = repo.path,
+                            )
+                        }
+                    }),
+                    ("pre-push", {
+                        if is_root {
+                            "nix develop .#default --command tend check --profile pre-push --affected-dag"
+                        } else {
+                            &format!(
+                                "nix develop {root}/#default --command tend check --root {sub} --profile pre-push",
+                                root = root.display(),
+                                sub = repo.path,
+                            )
+                        }
+                    }),
+                ];
+
+                for (hook_name, hook_cmd) in &hooks {
+                    let hook_path = hooks_dir.join(hook_name);
+                    let should_install = if hook_path.exists() {
+                        let existing = std::fs::read_to_string(&hook_path).unwrap_or_default();
+                        if existing.contains(managed_marker) {
+                            true
+                        } else if *force {
+                            true
+                        } else {
+                            eprintln!(
+                                "WARNING: Not overwriting unmanaged {} hook for '{}'. Use --force to override.",
+                                hook_name, repo.name
+                            );
+                            false
+                        }
+                    } else {
+                        true
+                    };
+
+                    if !should_install {
+                        continue;
+                    }
+
+                    let content = format!(
+                        r"#!/usr/bin/env bash
+# managed-by: phenix-stitch-hooks
+# Do not edit manually.
+
+{hook_cmd}
+"
+                    );
+                    std::fs::write(&hook_path, &content)
+                        .map_err(|e| format!("Failed to write {}: {}", hook_path.display(), e))?;
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755))
+                        .map_err(|e| format!("Failed to chmod {}: {}", hook_path.display(), e))?;
+                }
+
                 installed += 1;
                 println!("Installed hooks for '{}'", repo.name);
             }
+
             if installed == 0 {
                 println!("No repos with .git/hooks found.");
             } else {
-                println!("\nInstalled pre-commit and pre-push hooks for {} repo(s).", installed);
+                println!("\nInstalled hooks for {} repo(s).", installed);
             }
             Ok(())
-        }
-        HooksCommand::Install { all: false } => {
-            Err("Use --all to install hooks for all workspace repos".to_string())
         }
     }
 }
 
-fn install_hook(hooks_dir: &std::path::Path, name: &str, command: &str) -> Result<(), String> {
-    let hook_path = hooks_dir.join(name);
-    let content = format!(
-        r#"#!/usr/bin/env bash
-# Managed by stitch. Do not edit manually.
-{command}
-"#
-    );
-    std::fs::write(&hook_path, &content)
-        .map_err(|e| format!("Failed to write {}: {}", hook_path.display(), e))?;
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755))
-        .map_err(|e| format!("Failed to chmod {}: {}", hook_path.display(), e))?;
+fn validate_single_selection(
+    all: bool, changed: bool, dirty: bool, node: Option<&str>, nodes: &[String],
+) -> Result<(), String> {
+    let count = all as u32 + changed as u32 + dirty as u32 + node.is_some() as u32 + (!nodes.is_empty()) as u32;
+    if count == 0 {
+        return Err("Must specify one of: --all, --changed, --dirty, --node, --nodes".to_string());
+    }
+    if count > 1 {
+        return Err("Must specify exactly one selection mode (--all, --changed, --dirty, --node, --nodes)".to_string());
+    }
     Ok(())
+}
+
+fn cmd_exec(
+    all_flag: bool,
+    changed: bool,
+    dirty: bool,
+    node: Option<&str>,
+    nodes: &[String],
+    closure: &str,
+    order: &str,
+    mode: &str,
+    steps: &[String],
+    dry_run: bool,
+    apply: bool,
+    json: bool,
+    trailing_command: &[String],
+) -> Result<(), String> {
+    validate_single_selection(all_flag, changed, dirty, node, nodes)?;
+    let cfg = config::find_and_load()?;
+
+    let selection = if all_flag {
+        exec::SelectionMode::All
+    } else if changed {
+        exec::SelectionMode::Changed
+    } else if dirty {
+        exec::SelectionMode::Dirty
+    } else {
+        exec::SelectionMode::Explicit
+    };
+
+    let explicit_nodes = if let Some(n) = node {
+        vec![n.to_string()]
+    } else {
+        nodes.to_vec()
+    };
+
+    let closure_mode = exec::parse_closure_mode(closure)?;
+    let order_mode = exec::parse_order_mode(order)?;
+    let exec_mode = exec::parse_execution_mode(mode)?;
+
+    let exec_steps = if steps.is_empty() && !trailing_command.is_empty() {
+        vec![exec::ExecutionStep {
+            id: "cmd".to_string(),
+            mode: exec_mode,
+            kind: exec::StepKind::Shell {
+                argv: trailing_command.to_vec(),
+            },
+            condition: None,
+        }]
+    } else if !steps.is_empty() {
+        steps
+            .iter()
+            .map(|s| {
+                let parts: Vec<String> = s.split_whitespace().map(|p| p.to_string()).collect();
+                exec::ExecutionStep {
+                    id: parts.first().cloned().unwrap_or_else(|| "step".to_string()),
+                    mode: exec_mode,
+                    kind: exec::StepKind::Shell { argv: parts },
+                    condition: None,
+                }
+            })
+            .collect()
+    } else {
+        return Err("Must provide --step or a trailing command".to_string());
+    };
+
+    let scope = exec::ExecutionScope {
+        selection,
+        explicit_nodes,
+        closure: closure_mode,
+        order: order_mode,
+    };
+
+    let plan = exec::build_plan(&cfg, &scope, exec_steps)?;
+
+    if dry_run || json {
+        exec::print_plan(&plan, json);
+        if dry_run {
+            return Ok(());
+        }
+    }
+
+    let opts = exec::RunOptions {
+        dry_run,
+        apply,
+        json,
+    };
+    let report = exec::run_plan(&cfg, &plan, &opts)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+    } else {
+        println!(
+            "Exec: {}/{} nodes successful, {} failed",
+            report.successful_nodes, report.total_nodes, report.failed_nodes
+        );
+    }
+
+    if report.failed_nodes > 0 {
+        return Err("Some nodes failed".to_string());
+    }
+    Ok(())
+}
+
+fn cmd_verify(
+    node: Option<&str>,
+    nodes: &[String],
+    all: bool,
+    changed: bool,
+    dirty: bool,
+    upstream: bool,
+    downstream: bool,
+    dry_run: bool,
+    json: bool,
+) -> Result<(), String> {
+    validate_single_selection(all, changed, dirty, node, nodes).ok();
+    let cfg = config::find_and_load()?;
+
+    let selection = if all {
+        exec::SelectionMode::All
+    } else if changed {
+        exec::SelectionMode::Changed
+    } else if dirty {
+        exec::SelectionMode::Dirty
+    } else if node.is_some() || !nodes.is_empty() {
+        exec::SelectionMode::Explicit
+    } else {
+        exec::SelectionMode::Changed
+    };
+
+    let explicit_nodes = if let Some(n) = node {
+        vec![n.to_string()]
+    } else {
+        nodes.to_vec()
+    };
+
+    let closure = if upstream && downstream {
+        exec::ClosureMode::Connected
+    } else if upstream {
+        exec::ClosureMode::Upstream
+    } else if downstream {
+        exec::ClosureMode::Downstream
+    } else {
+        exec::ClosureMode::Downstream
+    };
+
+    let order = exec::OrderMode::ProvidersFirst;
+
+    let steps = vec![exec::ExecutionStep {
+        id: "tend-check".to_string(),
+        mode: exec::ExecutionMode::ReadOnly,
+        kind: exec::StepKind::Builtin {
+            name: "tend.check".to_string(),
+            args: serde_json::json!({"profile": "pre-push"}),
+        },
+        condition: None,
+    }];
+
+    let scope = exec::ExecutionScope {
+        selection,
+        explicit_nodes,
+        closure,
+        order,
+    };
+
+    let plan = exec::build_plan(&cfg, &scope, steps)?;
+
+    if dry_run || json {
+        exec::print_plan(&plan, json);
+        if dry_run {
+            return Ok(());
+        }
+    }
+
+    let opts = exec::RunOptions {
+        dry_run,
+        apply: false,
+        json,
+    };
+    let report = exec::run_plan(&cfg, &plan, &opts)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+    } else {
+        println!(
+            "Verify: {}/{} nodes passed, {} failed",
+            report.successful_nodes, report.total_nodes, report.failed_nodes
+        );
+    }
+
+    if report.failed_nodes > 0 {
+        return Err("Some nodes failed verification".to_string());
+    }
+    Ok(())
+}
+
+fn cmd_recipe(command: &RecipeCommand) -> Result<(), String> {
+    let cfg = config::find_and_load()?;
+    let root = cfg.config_dir.as_deref().unwrap_or(Path::new("."));
+    let collection = recipe::load_recipes(root)?;
+
+    match command {
+        RecipeCommand::List { json } => {
+            recipe::list_recipes(&collection, *json);
+            Ok(())
+        }
+        RecipeCommand::Plan {
+            name,
+            node,
+            nodes,
+            json,
+        } => {
+            let def = recipe::find_recipe(&collection, name)?;
+            let resolved = recipe::resolve_recipe(def)?;
+            let explicit_nodes = if let Some(n) = node {
+                vec![n.clone()]
+            } else {
+                nodes.clone()
+            };
+            recipe::plan_recipe(&cfg, &resolved, &explicit_nodes, *json)
+        }
+        RecipeCommand::Run {
+            name,
+            node,
+            nodes,
+            dry_run,
+            apply,
+            json,
+        } => {
+            let def = recipe::find_recipe(&collection, name)?;
+            let resolved = recipe::resolve_recipe(def)?;
+            let explicit_nodes = if let Some(n) = node {
+                vec![n.clone()]
+            } else {
+                nodes.clone()
+            };
+            let opts = exec::RunOptions {
+                dry_run: *dry_run,
+                apply: *apply,
+                json: *json,
+            };
+            let report = recipe::run_recipe(&cfg, &resolved, &explicit_nodes, &opts)?;
+            if report.failed_nodes > 0 {
+                return Err(format!(
+                    "Recipe '{}' completed with {} failed node(s)",
+                    name, report.failed_nodes
+                ));
+            }
+            Ok(())
+        }
+    }
 }
 
 fn cmd_changeset(command: &ChangesetCliCommand) -> Result<(), String> {
@@ -442,7 +854,62 @@ enum Commands {
         #[command(subcommand)]
         command: TopologyCommand,
     },
-    /// Install Git hooks across workspace repos
+    /// Run arbitrary commands over selected DAG scopes
+    Exec {
+        #[arg(long, help = "Select all nodes")]
+        all: bool,
+        #[arg(long, help = "Select changed nodes")]
+        changed: bool,
+        #[arg(long, help = "Select dirty nodes")]
+        dirty: bool,
+        #[arg(long, help = "Select a single node by name")]
+        node: Option<String>,
+        #[arg(long, value_delimiter = ',', help = "Select multiple nodes by name")]
+        nodes: Vec<String>,
+        #[arg(long, default_value = "self", help = "Closure mode: self, upstream, downstream, connected, all")]
+        closure: String,
+        #[arg(long, default_value = "stable", help = "Order mode: stable, providers-first, consumers-first")]
+        order: String,
+        #[arg(long, default_value = "readonly", help = "Execution mode: readonly, mutating")]
+        mode: String,
+        #[arg(long, help = "Step command (can be specified multiple times)")]
+        step: Vec<String>,
+        #[arg(long, help = "Dry run (show plan, no mutations)")]
+        dry_run: bool,
+        #[arg(long, help = "Apply (required for mutating mode)")]
+        apply: bool,
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, hide = true)]
+        trailing_command: Vec<String>,
+    },
+    /// Verify workspace (default: changed nodes + downstream + providers-first)
+    Verify {
+        #[arg(long, help = "Select a single node by name")]
+        node: Option<String>,
+        #[arg(long, value_delimiter = ',', help = "Select multiple nodes by name")]
+        nodes: Vec<String>,
+        #[arg(long, help = "Select all nodes")]
+        all: bool,
+        #[arg(long, help = "Select changed nodes")]
+        changed: bool,
+        #[arg(long, help = "Select dirty nodes")]
+        dirty: bool,
+        #[arg(long, help = "Include upstream dependencies")]
+        upstream: bool,
+        #[arg(long, help = "Include downstream consumers")]
+        downstream: bool,
+        #[arg(long, help = "Dry run (show plan, no mutations)")]
+        dry_run: bool,
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
+    },
+    /// Recipe operations: list, plan, run
+    Recipe {
+        #[command(subcommand)]
+        command: RecipeCommand,
+    },
+    /// Install/plan Git hooks across workspace repos
     Hooks {
         #[command(subcommand)]
         command: HooksCommand,
@@ -452,6 +919,41 @@ enum Commands {
     Changeset {
         #[command(subcommand)]
         command: ChangesetCliCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum RecipeCommand {
+    /// List available recipes
+    List {
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
+    },
+    /// Show the execution plan for a recipe
+    Plan {
+        /// Recipe name
+        name: String,
+        #[arg(long, help = "Override selection with a specific node")]
+        node: Option<String>,
+        #[arg(long, value_delimiter = ',', help = "Override selection with multiple nodes")]
+        nodes: Vec<String>,
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
+    },
+    /// Run a recipe
+    Run {
+        /// Recipe name
+        name: String,
+        #[arg(long, help = "Override selection with a specific node")]
+        node: Option<String>,
+        #[arg(long, value_delimiter = ',', help = "Override selection with multiple nodes")]
+        nodes: Vec<String>,
+        #[arg(long, help = "Dry run (show plan, no mutations)")]
+        dry_run: bool,
+        #[arg(long, help = "Apply (required for mutating recipes)")]
+        apply: bool,
+        #[arg(long, help = "Output as JSON")]
+        json: bool,
     },
 }
 
@@ -549,10 +1051,21 @@ enum TopologyCommand {
 
 #[derive(Subcommand)]
 enum HooksCommand {
+    /// Plan hook installation (show what would be installed)
+    Plan {
+        #[arg(long, help = "Plan for all repos")]
+        all: bool,
+        #[arg(long, help = "Plan for a specific repo")]
+        repo: Option<String>,
+    },
     /// Install hooks for workspace repos
     Install {
         #[arg(long, help = "Install hooks for all repos")]
         all: bool,
+        #[arg(long, help = "Install hooks for a specific repo")]
+        repo: Option<String>,
+        #[arg(long, help = "Overwrite unmanaged hooks")]
+        force: bool,
     },
 }
 
