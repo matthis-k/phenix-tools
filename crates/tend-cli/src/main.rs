@@ -11,6 +11,7 @@ use tend::execute;
 use tend::model::{Phase, PlanRequest, RunMode};
 use tend::planner;
 use tend::report;
+use tend::workspace;
 
 #[derive(Parser)]
 #[command(
@@ -66,6 +67,8 @@ enum Commands {
         mode: String,
         #[arg(long)]
         profile: Option<String>,
+        #[arg(long, help = "Only check affected DAG nodes")]
+        affected_dag: bool,
     },
     /// Run non-mutating verification tasks
     Verify {
@@ -185,9 +188,10 @@ fn main() {
             phase,
             mode,
             profile,
+            affected_dag,
         } => match Phase::from_str(&phase) {
             Ok(p) => match RunMode::from_str(&mode) {
-                Ok(m) => cmd_run(&root, configs.as_deref(), p, m, profile.as_deref()),
+                Ok(m) => cmd_run(&root, configs.as_deref(), p, m, profile.as_deref(), affected_dag),
                 Err(e) => Err(e),
             },
             Err(e) => Err(e),
@@ -296,9 +300,8 @@ fn cmd_check(
     staged: bool,
     _offline: bool,
     _locked: bool,
-    _affected_dag: bool,
+    affected_dag: bool,
 ) -> Result<i32, String> {
-    // Determine phase and mode from profile
     let (phase, mode) = if profile == "fix" {
         (Phase::Fix, RunMode::Full)
     } else if staged {
@@ -306,6 +309,10 @@ fn cmd_check(
     } else {
         (Phase::Verify, RunMode::Changed)
     };
+
+    if affected_dag {
+        return workspace::run_affected_dag(root, phase, mode, Some(profile));
+    }
 
     let discovered =
         discover::discover_configs(root, configs).map_err(|e| format!("discovery failed: {e}"))?;
@@ -674,7 +681,12 @@ fn cmd_run(
     phase: Phase,
     mode: RunMode,
     profile: Option<&str>,
+    affected_dag: bool,
 ) -> Result<i32, String> {
+    if affected_dag {
+        return workspace::run_affected_dag(root, phase, mode, profile);
+    }
+
     let discovered =
         discover::discover_configs(root, configs).map_err(|e| format!("discovery failed: {e}"))?;
     let nodes = discover::resolve_nodes(root, discovered);
@@ -727,7 +739,7 @@ fn cmd_verify(
         VerifyMode::Full => RunMode::Full,
         VerifyMode::Force => RunMode::Force,
     };
-    cmd_run(root, configs, Phase::Verify, run_mode, None)
+    cmd_run(root, configs, Phase::Verify, run_mode, None, false)
 }
 
 fn cmd_fix(root: &PathBuf, configs: Option<&[PathBuf]>, mode: &FixMode) -> Result<i32, String> {
@@ -735,7 +747,7 @@ fn cmd_fix(root: &PathBuf, configs: Option<&[PathBuf]>, mode: &FixMode) -> Resul
         FixMode::Changed => RunMode::Changed,
         FixMode::All => RunMode::Full,
     };
-    cmd_run(root, configs, Phase::Fix, run_mode, None)
+    cmd_run(root, configs, Phase::Fix, run_mode, None, false)
 }
 
 fn cmd_generate(
@@ -747,11 +759,11 @@ fn cmd_generate(
         FixMode::Changed => RunMode::Changed,
         FixMode::All => RunMode::Full,
     };
-    cmd_run(root, configs, Phase::Generate, run_mode, None)
+    cmd_run(root, configs, Phase::Generate, run_mode, None, false)
 }
 
 fn cmd_gate(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> {
-    cmd_run(root, configs, Phase::Verify, RunMode::Changed, None)
+    cmd_run(root, configs, Phase::Verify, RunMode::Changed, None, false)
 }
 
 fn cmd_explain(root: &PathBuf, configs: Option<&[PathBuf]>) -> Result<i32, String> {

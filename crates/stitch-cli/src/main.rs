@@ -67,6 +67,7 @@ fn main() {
         ),
         Commands::Graph { command } => cmd_graph(command),
         Commands::Topology { command } => cmd_topology(command),
+        Commands::Hooks { command } => cmd_hooks(command),
         Commands::Changeset { command } => cmd_changeset(command),
     };
 
@@ -225,6 +226,60 @@ fn cmd_topology(command: &TopologyCommand) -> Result<(), String> {
             Ok(())
         }
     }
+}
+
+fn cmd_hooks(command: &HooksCommand) -> Result<(), String> {
+    match command {
+        HooksCommand::Install { all: true } => {
+            let cfg = config::find_and_load()?;
+            let mut installed = 0usize;
+            for repo in &cfg.repos {
+                let repo_path = repo.resolved_path(&cfg);
+                let hooks_dir = repo_path.join(".git").join("hooks");
+                if !hooks_dir.exists() {
+                    println!("Skipping {} (no .git/hooks)", repo.name);
+                    continue;
+                }
+                install_hook(
+                    &hooks_dir,
+                    "pre-commit",
+                    "tend check --profile git-hook --staged",
+                )?;
+                install_hook(
+                    &hooks_dir,
+                    "pre-push",
+                    "tend check --profile pre-push --affected-dag",
+                )?;
+                installed += 1;
+                println!("Installed hooks for '{}'", repo.name);
+            }
+            if installed == 0 {
+                println!("No repos with .git/hooks found.");
+            } else {
+                println!("\nInstalled pre-commit and pre-push hooks for {} repo(s).", installed);
+            }
+            Ok(())
+        }
+        HooksCommand::Install { all: false } => {
+            Err("Use --all to install hooks for all workspace repos".to_string())
+        }
+    }
+}
+
+fn install_hook(hooks_dir: &std::path::Path, name: &str, command: &str) -> Result<(), String> {
+    let hook_path = hooks_dir.join(name);
+    let content = format!(
+        r#"#!/usr/bin/env bash
+# Managed by stitch. Do not edit manually.
+{command}
+"#
+    );
+    std::fs::write(&hook_path, &content)
+        .map_err(|e| format!("Failed to write {}: {}", hook_path.display(), e))?;
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755))
+        .map_err(|e| format!("Failed to chmod {}: {}", hook_path.display(), e))?;
+    Ok(())
 }
 
 fn cmd_changeset(command: &ChangesetCliCommand) -> Result<(), String> {
@@ -387,6 +442,11 @@ enum Commands {
         #[command(subcommand)]
         command: TopologyCommand,
     },
+    /// Install Git hooks across workspace repos
+    Hooks {
+        #[command(subcommand)]
+        command: HooksCommand,
+    },
     /// Manage changesets (legacy, hidden)
     #[command(hide = true)]
     Changeset {
@@ -484,6 +544,15 @@ enum TopologyCommand {
             help = "Output format: mermaid, json, text"
         )]
         format: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum HooksCommand {
+    /// Install hooks for workspace repos
+    Install {
+        #[arg(long, help = "Install hooks for all repos")]
+        all: bool,
     },
 }
 

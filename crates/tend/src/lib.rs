@@ -6,3 +6,4 @@ pub mod model;
 pub mod planner;
 pub mod profiles;
 pub mod report;
+pub mod workspace;
