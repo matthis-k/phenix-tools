@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::git;
+use crate::graph;
 use crate::model::WorkspaceConfig;
 use crate::status;
 
@@ -265,9 +266,13 @@ fn config_order(cfg: &WorkspaceConfig) -> Vec<String> {
     cfg.repos.iter().map(|r| r.name.clone()).collect()
 }
 
-fn build_simple_graph(
-    cfg: &WorkspaceConfig,
-) -> (Vec<String>, BTreeMap<String, Vec<String>>, BTreeMap<String, Vec<String>>) {
+type DependencyGraph = (
+    Vec<String>,
+    BTreeMap<String, Vec<String>>,
+    BTreeMap<String, Vec<String>>,
+);
+
+fn build_dependency_graph(cfg: &WorkspaceConfig) -> Result<DependencyGraph, String> {
     let mut deps: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut dependents: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let order = config_order(cfg);
@@ -277,44 +282,122 @@ fn build_simple_graph(
         dependents.entry(name.clone()).or_default();
     }
 
-    let cwd = std::env::current_dir().unwrap_or_default();
-    for repo in &cfg.repos {
-        let repo_path = if Path::new(&repo.path).is_absolute() {
-            PathBuf::from(&repo.path)
-        } else if let Some(ref config_dir) = cfg.config_dir {
-            config_dir.join(&repo.path)
-        } else {
-            cwd.join(&repo.path)
-        };
-        let flake_path = repo_path.join("flake.nix");
-        if !flake_path.exists() {
-            continue;
-        }
-        let content = match std::fs::read_to_string(&flake_path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        for other in &cfg.repos {
-            if other.name == repo.name || other.name == "phenix" {
-                continue;
-            }
-            if content.contains(&format!("./{}", other.path))
-                || content.contains(&format!("\"{}\"", other.name))
-                || content.contains(&format!("{}.url", other.name))
-            {
-                deps.entry(repo.name.clone())
-                    .or_default()
-                    .push(other.name.clone());
-                dependents
-                    .entry(other.name.clone())
-                    .or_default()
-                    .push(repo.name.clone());
-            }
-        }
+    let root = cfg
+        .config_dir
+        .as_deref()
+        .ok_or_else(|| "Cannot derive Stitch DAG: workspace config directory is unavailable".to_string())?;
+    let metadata = root.join(".stitch").join("topology.json");
+    if !metadata.exists() {
+        return Err(format!(
+            "Cannot derive Stitch DAG: topology metadata is missing at {}",
+            metadata.display()
+        ));
     }
 
-    (order, deps, dependents)
+    let dag = graph::derive::derive_graph_from_locks(root, Some(&metadata))
+        .map_err(|e| format!("Cannot derive Stitch DAG from canonical topology: {e}"))?;
+    let report = graph::validate::validate_graph(&dag, &graph::validate::ValidateOptions::default());
+    if !report.valid {
+        let messages = report
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == graph::validate::DiagnosticSeverity::Error)
+            .map(|d| format!("{}: {}", d.code, d.message))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(format!("Cannot use invalid Stitch DAG: {messages}"));
+    }
+
+    for edge in dag.edges {
+        if !deps.contains_key(&edge.from) || !deps.contains_key(&edge.to) {
+            return Err(format!(
+                "Canonical Stitch DAG edge references unknown configured node: {} -> {}",
+                edge.from, edge.to
+            ));
+        }
+        deps.entry(edge.from.clone()).or_default().push(edge.to.clone());
+        dependents.entry(edge.to).or_default().push(edge.from);
+    }
+
+    Ok((order, deps, dependents))
+}
+
+pub struct HookInstallResult {
+    pub installed: bool,
+    pub message: String,
+}
+
+pub fn install_hooks_for_repo(
+    repo_name: &str,
+    repo_path: &Path,
+    workspace_root: &Path,
+    force: bool,
+) -> Result<HookInstallResult, String> {
+    let managed_marker = "# managed-by: phenix-stitch-hooks";
+    let hooks_dir = repo_path.join(".git").join("hooks");
+
+    if !hooks_dir.exists() {
+        return Ok(HookInstallResult {
+            installed: false,
+            message: ".git/hooks not found".to_string(),
+        });
+    }
+
+    let is_root = repo_name == "phenix";
+    let sub_path = repo_path.strip_prefix(workspace_root).unwrap_or(repo_path);
+    let pre_commit_cmd = if is_root {
+        "nix develop .#default --command tend check --profile git-hook --staged --affected-dag".to_string()
+    } else {
+        format!(
+            "nix develop {root}/#default --command tend check --root {sub} --profile git-hook --staged",
+            root = workspace_root.display(),
+            sub = sub_path.display(),
+        )
+    };
+    let pre_push_cmd = if is_root {
+        "nix develop .#default --command tend check --profile pre-push --affected-dag".to_string()
+    } else {
+        format!(
+            "nix develop {root}/#default --command tend check --root {sub} --profile pre-push",
+            root = workspace_root.display(),
+            sub = sub_path.display(),
+        )
+    };
+
+    for (hook_name, hook_cmd) in [("pre-commit", pre_commit_cmd), ("pre-push", pre_push_cmd)] {
+        let hook_path = hooks_dir.join(hook_name);
+        let should_install = if hook_path.exists() {
+            let existing = std::fs::read_to_string(&hook_path).unwrap_or_default();
+            existing.contains(managed_marker) || force
+        } else {
+            true
+        };
+        if !should_install {
+            return Err(format!(
+                "Not overwriting unmanaged {hook_name} hook for '{repo_name}'. Use --force to override."
+            ));
+        }
+
+        let content = format!(
+            r"#!/usr/bin/env bash
+# managed-by: phenix-stitch-hooks
+# Source: stitch hooks install
+# Do not edit manually.
+
+{hook_cmd}
+"
+        );
+        std::fs::write(&hook_path, &content)
+            .map_err(|e| format!("Failed to write {}: {}", hook_path.display(), e))?;
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("Failed to chmod {}: {}", hook_path.display(), e))?;
+    }
+
+    Ok(HookInstallResult {
+        installed: true,
+        message: "Hooks installed".to_string(),
+    })
 }
 
 fn topological_sort(
@@ -322,7 +405,7 @@ fn topological_sort(
     deps: &BTreeMap<String, Vec<String>>,
     order: &[String],
     mode: OrderMode,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     let node_set: BTreeSet<&String> = all_nodes.iter().collect();
     let mut in_degree: BTreeMap<String, usize> = BTreeMap::new();
     let mut out_edges: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -381,11 +464,23 @@ fn topological_sort(
         });
     }
 
+    if result.len() != all_nodes.len() {
+        let unresolved: Vec<String> = all_nodes
+            .iter()
+            .filter(|n| !result.contains(n))
+            .cloned()
+            .collect();
+        return Err(format!(
+            "Cannot order Stitch DAG scope: cycle among {}",
+            unresolved.join(", ")
+        ));
+    }
+
     if mode == OrderMode::ConsumersFirst {
         result.reverse();
     }
 
-    result
+    Ok(result)
 }
 
 fn expand_closure(
@@ -400,7 +495,7 @@ fn expand_closure(
         ClosureMode::All => all_nodes.to_vec(),
         ClosureMode::Upstream => {
             let mut result = BTreeSet::new();
-            let mut stack: Vec<String> = selected.iter().cloned().collect();
+            let mut stack: Vec<String> = selected.to_vec();
             while let Some(node) = stack.pop() {
                 if result.insert(node.clone()) {
                     if let Some(providers) = deps.get(&node) {
@@ -414,7 +509,7 @@ fn expand_closure(
         }
         ClosureMode::Downstream => {
             let mut result = BTreeSet::new();
-            let mut stack: Vec<String> = selected.iter().cloned().collect();
+            let mut stack: Vec<String> = selected.to_vec();
             while let Some(node) = stack.pop() {
                 if result.insert(node.clone()) {
                     if let Some(consumers) = dependents.get(&node) {
@@ -450,7 +545,7 @@ pub fn build_scope(
     let config_order = config_order(cfg);
     let all_names: Vec<String> = cfg.repos.iter().map(|r| r.name.clone()).collect();
     let statuses = status::collect_all(cfg)?;
-    let graph = build_simple_graph(cfg);
+    let graph = build_dependency_graph(cfg)?;
     let deps = graph.1;
     let dependents = graph.2;
 
@@ -506,11 +601,20 @@ pub fn build_scope(
             result
         }
         OrderMode::ProvidersFirst | OrderMode::ConsumersFirst => {
-            topological_sort(&closure_nodes, &deps, &config_order, scope.order)
+            topological_sort(&closure_nodes, &deps, &config_order, scope.order)?
         }
     };
 
     let selected_set: BTreeSet<&String> = selected.iter().collect();
+    let downstream_set: BTreeSet<String> = expand_closure(
+        &selected,
+        ClosureMode::Downstream,
+        &all_names,
+        &deps,
+        &dependents,
+    )
+    .into_iter()
+    .collect();
 
     let changed_set: BTreeSet<String> = {
         let mut s = BTreeSet::new();
@@ -523,7 +627,6 @@ pub fn build_scope(
         s
     };
 
-    let ordered = ordered;
     let mut result = Vec::new();
 
     for name in ordered {
@@ -539,13 +642,13 @@ pub fn build_scope(
         let directly_changed = changed_set.contains(&name);
 
         result.push(ExecutionNode {
-            name,
+            name: name.clone(),
             path,
             role: Some(layer.1),
             layer: layer.0,
             directly_selected,
             directly_changed,
-            downstream_only: !directly_selected && !directly_changed,
+            downstream_only: downstream_set.contains(&name) && !directly_selected,
             steps: Vec::new(),
         });
     }
@@ -661,7 +764,7 @@ pub fn run_plan(
         let mut node_success = true;
 
         for step in &node.steps {
-            let result = execute_step(&node, step, cfg);
+            let result = execute_step(node, step, cfg);
             let success = result.success;
             if !success {
                 node_success = false;
@@ -705,6 +808,15 @@ pub fn run_plan(
 fn execute_step(node: &ExecutionNode, step: &ExecutionStep, cfg: &WorkspaceConfig) -> StepResult {
     match &step.kind {
         StepKind::Shell { argv } => {
+            if argv.is_empty() {
+                return StepResult {
+                    node: node.name.clone(),
+                    step_id: step.id.clone(),
+                    success: false,
+                    stdout: String::new(),
+                    stderr: "Shell step has empty argv; provide a program or shell command".to_string(),
+                };
+            }
             let program = &argv[0];
             let args: Vec<&str> = argv[1..].iter().map(|s| s.as_str()).collect();
 
@@ -1067,7 +1179,18 @@ fn builtin_nix_update_inputs(
     };
 
     // Determine which inputs are upstream providers in the workspace DAG
-    let graph = build_simple_graph(cfg);
+    let graph = match build_dependency_graph(cfg) {
+        Ok(graph) => graph,
+        Err(e) => {
+            return StepResult {
+                node: node.name.clone(),
+                step_id: "builtin:nix.updateInputs".to_string(),
+                success: false,
+                stdout: String::new(),
+                stderr: e,
+            }
+        }
+    };
     let deps = graph.1; // node -> providers
     let upstream_names: std::collections::BTreeSet<String> = deps
         .get(&node.name)
@@ -1194,105 +1317,22 @@ fn builtin_hooks_install(
     cfg: &WorkspaceConfig,
 ) -> StepResult {
     let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
-    let managed_marker = "# managed-by: phenix-stitch-hooks";
-    let hooks_dir = node.path.join(".git").join("hooks");
-
-    if !hooks_dir.exists() {
-        return StepResult {
+    let root = cfg.config_dir.as_deref().unwrap_or(Path::new("."));
+    match install_hooks_for_repo(&node.name, &node.path, root, force) {
+        Ok(result) => StepResult {
+            node: node.name.clone(),
+            step_id: "builtin:hooks.install".to_string(),
+            success: result.installed,
+            stdout: result.message,
+            stderr: String::new(),
+        },
+        Err(e) => StepResult {
             node: node.name.clone(),
             step_id: "builtin:hooks.install".to_string(),
             success: false,
             stdout: String::new(),
-            stderr: ".git/hooks not found".to_string(),
-        };
-    }
-
-    let is_root = node.name == "phenix";
-    let root = cfg.config_dir.as_deref().unwrap_or(Path::new("."));
-
-    let pre_commit_cmd: String = if is_root {
-        "nix develop .#default --command tend check --profile git-hook --staged --affected-dag".to_string()
-    } else {
-        format!(
-            "nix develop {root}/#default --command tend check --root {sub} --profile git-hook --staged",
-            root = root.display(),
-            sub = node.path.strip_prefix(root).unwrap_or(&node.path).display()
-        )
-    };
-    let pre_push_cmd: String = if is_root {
-        "nix develop .#default --command tend check --profile pre-push --affected-dag".to_string()
-    } else {
-        format!(
-            "nix develop {root}/#default --command tend check --root {sub} --profile pre-push",
-            root = root.display(),
-            sub = node.path.strip_prefix(root).unwrap_or(&node.path).display()
-        )
-    };
-
-    let hooks: [(&str, &str); 2] = [
-        ("pre-commit", &pre_commit_cmd),
-        ("pre-push", &pre_push_cmd),
-    ];
-
-    for (hook_name, hook_cmd) in &hooks {
-        let hook_path = hooks_dir.join(hook_name);
-        let install = if hook_path.exists() {
-            let existing = std::fs::read_to_string(&hook_path).unwrap_or_default();
-            if existing.contains(managed_marker) {
-                true
-            } else if force {
-                true
-            } else {
-                if !args.is_null() {
-                    // Only emit warning if called explicitly
-                }
-                false
-            }
-        } else {
-            true
-        };
-
-        if !install {
-            return StepResult {
-                node: node.name.clone(),
-                step_id: format!("builtin:hooks.install({hook_name})"),
-                success: false,
-                stdout: String::new(),
-                stderr: format!(
-                    "Not overwriting unmanaged {hook_name} hook. Use --force to override."
-                ),
-            };
-        }
-
-        let content = format!(
-            r"#!/usr/bin/env bash
-# managed-by: phenix-stitch-hooks
-# Source: stitch hooks install
-# Do not edit manually.
-
-{hook_cmd}
-"
-        );
-
-        if std::fs::write(&hook_path, &content).is_err() {
-            return StepResult {
-                node: node.name.clone(),
-                step_id: format!("builtin:hooks.install({hook_name})"),
-                success: false,
-                stdout: String::new(),
-                stderr: format!("Failed to write {hook_path:?}"),
-            };
-        }
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755));
-    }
-
-    StepResult {
-        node: node.name.clone(),
-        step_id: "builtin:hooks.install".to_string(),
-        success: true,
-        stdout: "Hooks installed".to_string(),
-        stderr: String::new(),
+            stderr: e,
+        },
     }
 }
 
@@ -1378,8 +1418,70 @@ pub fn print_plan(plan: &ExecutionPlan, json: bool) {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEST_CFG_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     fn make_test_cfg() -> WorkspaceConfig {
+        let id = TEST_CFG_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let root = std::env::temp_dir().join(format!(
+            "phenix_stitch_exec_tests_{}_{}",
+            std::process::id(),
+            id
+        ));
+        let stitch_dir = root.join(".stitch");
+        std::fs::create_dir_all(&stitch_dir).unwrap();
+        for path in [
+            "flakes/00-pins/pins",
+            "flakes/02-producers/tools",
+            "flakes/05-consumers/hosts",
+        ] {
+            std::fs::create_dir_all(root.join(path)).unwrap();
+        }
+        std::fs::write(
+            root.join("flakes/00-pins/pins/flake.lock"),
+            r#"{ "nodes": { "root": {} }, "root": "root", "version": 7 }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("flakes/02-producers/tools/flake.lock"),
+            r#"{
+              "nodes": {
+                "root": { "inputs": { "pins": "pins" } },
+                "pins": { "locked": { "type": "path", "path": "../00-pins/pins" } }
+              },
+              "root": "root",
+              "version": 7
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("flakes/05-consumers/hosts/flake.lock"),
+            r#"{
+              "nodes": {
+                "root": { "inputs": { "tools": "tools" } },
+                "tools": { "locked": { "type": "path", "path": "../../02-producers/tools" } }
+              },
+              "root": "root",
+              "version": 7
+            }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            stitch_dir.join("topology.json"),
+            r#"{
+              "version": 1,
+              "workspace": "test",
+              "repos": [
+                { "name": "pins", "role": "pins", "layer": 0, "path": "flakes/00-pins/pins" },
+                { "name": "tools", "role": "producer", "layer": 2, "path": "flakes/02-producers/tools" },
+                { "name": "hosts", "role": "consumer", "layer": 5, "path": "flakes/05-consumers/hosts" },
+                { "name": "phenix", "role": "root", "layer": 6, "path": "." }
+              ]
+            }"#,
+        )
+        .unwrap();
+
         WorkspaceConfig {
             version: 1,
             workspace: "test".to_string(),
@@ -1401,7 +1503,7 @@ mod tests {
                     path: ".".to_string(),
                 },
             ],
-            config_dir: Some(PathBuf::from("/tmp/test_ws")),
+            config_dir: Some(root),
         }
     }
 
@@ -1479,7 +1581,7 @@ mod tests {
         let order = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         // a depends on b, b depends on c
         // providers-first: c, b, a
-        let result = topological_sort(&all_nodes, &deps, &order, OrderMode::ProvidersFirst);
+        let result = topological_sort(&all_nodes, &deps, &order, OrderMode::ProvidersFirst).unwrap();
         assert_eq!(result, vec!["c", "b", "a"]);
     }
 
@@ -1492,8 +1594,42 @@ mod tests {
         deps.insert("c".to_string(), vec![]);
         let order = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         // reverse of providers-first: a, b, c
-        let result = topological_sort(&all_nodes, &deps, &order, OrderMode::ConsumersFirst);
+        let result = topological_sort(&all_nodes, &deps, &order, OrderMode::ConsumersFirst).unwrap();
         assert_eq!(result, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_topological_sort_cycle_fails() {
+        let all_nodes = vec!["a".to_string(), "b".to_string()];
+        let mut deps: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        deps.insert("a".to_string(), vec!["b".to_string()]);
+        deps.insert("b".to_string(), vec!["a".to_string()]);
+        let order = all_nodes.clone();
+        let result = topological_sort(&all_nodes, &deps, &order, OrderMode::ProvidersFirst);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_execute_empty_shell_argv_fails_clearly() {
+        let node = ExecutionNode {
+            name: "test".to_string(),
+            path: PathBuf::from("/tmp"),
+            role: None,
+            layer: 0,
+            directly_selected: true,
+            directly_changed: false,
+            downstream_only: false,
+            steps: vec![],
+        };
+        let step = ExecutionStep {
+            id: "empty".to_string(),
+            mode: ExecutionMode::ReadOnly,
+            kind: StepKind::Shell { argv: vec![] },
+            condition: None,
+        };
+        let result = execute_step(&node, &step, &make_test_cfg());
+        assert!(!result.success);
+        assert!(result.stderr.contains("empty argv"));
     }
 
     #[test]
@@ -1718,6 +1854,25 @@ mod tests {
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].name, "pins");
         assert!(nodes[0].directly_selected);
+    }
+
+    #[test]
+    fn test_downstream_only_excludes_direct_selection() {
+        let scope = ExecutionScope {
+            selection: SelectionMode::Explicit,
+            explicit_nodes: vec!["pins".to_string()],
+            closure: ClosureMode::Downstream,
+            order: OrderMode::ProvidersFirst,
+        };
+        let cfg = make_test_cfg();
+        let nodes = build_scope(&cfg, &scope).unwrap();
+        let by_name: BTreeMap<String, bool> = nodes
+            .iter()
+            .map(|node| (node.name.clone(), node.downstream_only))
+            .collect();
+        assert_eq!(by_name.get("pins"), Some(&false));
+        assert_eq!(by_name.get("tools"), Some(&true));
+        assert_eq!(by_name.get("hosts"), Some(&true));
     }
 
     #[test]

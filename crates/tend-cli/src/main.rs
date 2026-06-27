@@ -298,8 +298,8 @@ fn cmd_check(
     configs: Option<&[PathBuf]>,
     profile: &str,
     staged: bool,
-    _offline: bool,
-    _locked: bool,
+    offline: bool,
+    locked: bool,
     affected_dag: bool,
 ) -> Result<i32, String> {
     let (phase, mode) = if profile == "fix" {
@@ -331,8 +331,8 @@ fn cmd_check(
         group: None,
         target: None,
         files,
-        offline: false,
-        locked: false,
+        offline,
+        locked,
     };
 
     let plan = planner::build_plan(&nodes, &req).map_err(|e| match e {

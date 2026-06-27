@@ -1,4 +1,4 @@
-#![allow(clippy::too_many_arguments)]
+#![allow(clippy::items_after_test_module, clippy::too_many_arguments)]
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -282,8 +282,6 @@ fn cmd_topology(command: &TopologyCommand) -> Result<(), String> {
 }
 
 fn cmd_hooks(command: &HooksCommand) -> Result<(), String> {
-    let managed_marker = "# managed-by: phenix-stitch-hooks";
-
     match command {
         HooksCommand::Plan { all, repo } => {
             let cfg = config::find_and_load()?;
@@ -310,7 +308,7 @@ fn cmd_hooks(command: &HooksCommand) -> Result<(), String> {
                     let hook_path = hooks_dir.join(hook_name);
                     let status = if hook_path.exists() {
                         let existing = std::fs::read_to_string(&hook_path).unwrap_or_default();
-                        if existing.contains(managed_marker) {
+                        if existing.contains("# managed-by: phenix-stitch-hooks") {
                             "managed (will overwrite)"
                         } else {
                             "unmanaged (will NOT overwrite unless --force)"
@@ -344,77 +342,17 @@ fn cmd_hooks(command: &HooksCommand) -> Result<(), String> {
 
             for repo in &targets {
                 let repo_path = repo.resolved_path(&cfg);
-                let hooks_dir = repo_path.join(".git").join("hooks");
-                if !hooks_dir.exists() {
-                    println!("Skipping {} (no .git/hooks)", repo.name);
-                    continue;
-                }
-
-                let is_root = repo.name == "phenix";
-
-                let pre_commit_cmd: String = if is_root {
-                    "nix develop .#default --command tend check --profile git-hook --staged --affected-dag".to_string()
-                } else {
-                    format!(
-                        "nix develop {root}/#default --command tend check --root {sub} --profile git-hook --staged",
-                        root = root.display(),
-                        sub = repo.path,
-                    )
-                };
-                let pre_push_cmd: String = if is_root {
-                    "nix develop .#default --command tend check --profile pre-push --affected-dag".to_string()
-                } else {
-                    format!(
-                        "nix develop {root}/#default --command tend check --root {sub} --profile pre-push",
-                        root = root.display(),
-                        sub = repo.path,
-                    )
-                };
-                let hooks: [(&str, &str); 2] = [
-                    ("pre-commit", &pre_commit_cmd),
-                    ("pre-push", &pre_push_cmd),
-                ];
-
-                for (hook_name, hook_cmd) in &hooks {
-                    let hook_path = hooks_dir.join(hook_name);
-                    let should_install = if hook_path.exists() {
-                        let existing = std::fs::read_to_string(&hook_path).unwrap_or_default();
-                        if existing.contains(managed_marker) {
-                            true
-                        } else if *force {
-                            true
-                        } else {
-                            eprintln!(
-                                "WARNING: Not overwriting unmanaged {} hook for '{}'. Use --force to override.",
-                                hook_name, repo.name
-                            );
-                            false
-                        }
-                    } else {
-                        true
-                    };
-
-                    if !should_install {
-                        continue;
+                match exec::install_hooks_for_repo(&repo.name, &repo_path, root, *force) {
+                    Ok(result) if result.installed => {
+                        installed += 1;
+                        println!("Installed hooks for '{}'", repo.name);
                     }
-
-                    let content = format!(
-                        r"#!/usr/bin/env bash
-# managed-by: phenix-stitch-hooks
-# Do not edit manually.
-
-{hook_cmd}
-"
-                    );
-                    std::fs::write(&hook_path, &content)
-                        .map_err(|e| format!("Failed to write {}: {}", hook_path.display(), e))?;
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755))
-                        .map_err(|e| format!("Failed to chmod {}: {}", hook_path.display(), e))?;
+                    Ok(result) => println!("Skipping {} ({})", repo.name, result.message),
+                    Err(e) if e.contains("Not overwriting unmanaged") => {
+                        eprintln!("WARNING: {e}");
+                    }
+                    Err(e) => return Err(e),
                 }
-
-                installed += 1;
-                println!("Installed hooks for '{}'", repo.name);
             }
 
             if installed == 0 {
@@ -428,10 +366,19 @@ fn cmd_hooks(command: &HooksCommand) -> Result<(), String> {
 }
 
 fn validate_single_selection(
-    all: bool, changed: bool, dirty: bool, node: Option<&str>, nodes: &[String],
+    all: bool,
+    changed: bool,
+    dirty: bool,
+    node: Option<&str>,
+    nodes: &[String],
+    allow_empty: bool,
 ) -> Result<(), String> {
-    let count = all as u32 + changed as u32 + dirty as u32 + node.is_some() as u32 + (!nodes.is_empty()) as u32;
-    if count == 0 {
+    let count = all as u32
+        + changed as u32
+        + dirty as u32
+        + node.is_some() as u32
+        + (!nodes.is_empty()) as u32;
+    if count == 0 && !allow_empty {
         return Err("Must specify one of: --all, --changed, --dirty, --node, --nodes".to_string());
     }
     if count > 1 {
@@ -455,7 +402,7 @@ fn cmd_exec(
     json: bool,
     trailing_command: &[String],
 ) -> Result<(), String> {
-    validate_single_selection(all_flag, changed, dirty, node, nodes)?;
+    validate_single_selection(all_flag, changed, dirty, node, nodes, false)?;
     let cfg = config::find_and_load()?;
 
     let selection = if all_flag {
@@ -490,12 +437,14 @@ fn cmd_exec(
     } else if !steps.is_empty() {
         steps
             .iter()
-            .map(|s| {
-                let parts: Vec<String> = s.split_whitespace().map(|p| p.to_string()).collect();
+            .enumerate()
+            .map(|(idx, s)| {
                 exec::ExecutionStep {
-                    id: parts.first().cloned().unwrap_or_else(|| "step".to_string()),
+                    id: format!("step-{}", idx + 1),
                     mode: exec_mode,
-                    kind: exec::StepKind::Shell { argv: parts },
+                    kind: exec::StepKind::Shell {
+                        argv: vec!["sh".to_string(), "-c".to_string(), s.to_string()],
+                    },
                     condition: None,
                 }
             })
@@ -553,7 +502,7 @@ fn cmd_verify(
     dry_run: bool,
     json: bool,
 ) -> Result<(), String> {
-    validate_single_selection(all, changed, dirty, node, nodes).ok();
+    validate_single_selection(all, changed, dirty, node, nodes, true)?;
     let cfg = config::find_and_load()?;
 
     let selection = if all {
@@ -578,8 +527,6 @@ fn cmd_verify(
         exec::ClosureMode::Connected
     } else if upstream {
         exec::ClosureMode::Upstream
-    } else if downstream {
-        exec::ClosureMode::Downstream
     } else {
         exec::ClosureMode::Downstream
     };
@@ -825,7 +772,7 @@ enum Commands {
         #[arg(
             long,
             default_value = "push",
-            help = "Mode: push (pull/rebase planned)"
+            help = "Mode: pull, push, full"
         )]
         mode: Option<String>,
         #[arg(long, help = "Apply (required for actual sync operations)")]
@@ -1308,6 +1255,28 @@ fn cmd_diff(repo: Option<&str>, staged: bool, json: bool) -> Result<(), String> 
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verify_selection_allows_empty_default() {
+        assert!(validate_single_selection(false, false, false, None, &[], true).is_ok());
+    }
+
+    #[test]
+    fn exec_selection_requires_selection() {
+        assert!(validate_single_selection(false, false, false, None, &[], false).is_err());
+    }
+
+    #[test]
+    fn selection_rejects_ambiguous_modes() {
+        assert!(validate_single_selection(true, true, false, None, &[], true).is_err());
+        assert!(validate_single_selection(false, false, false, Some("a"), &["b".to_string()], true)
+            .is_err());
+    }
 }
 
 fn cmd_dag(mode: Option<&str>, split: Option<&str>, json: bool) -> Result<(), String> {
@@ -1804,7 +1773,13 @@ fn cmd_sync(
     repos: &[String],
     run_tend: bool,
 ) -> Result<(), String> {
-    let _mode = mode.unwrap_or("push");
+    let mode = mode.unwrap_or("push");
+    let (update_inputs, push_outputs) = match mode {
+        "pull" => (true, false),
+        "push" => (false, true),
+        "full" => (true, true),
+        other => return Err(format!("Unknown sync mode '{other}' (use: pull, push, full)")),
+    };
     let cfg = config::find_and_load()?;
 
     let explicit_nodes: Vec<String> = if repos.is_empty() {
@@ -1852,7 +1827,7 @@ fn cmd_sync(
         let mut steps: Vec<exec::ExecutionStep> = Vec::new();
 
         // Update flake lock inputs (only for nodes with lockfiles)
-        if node.path.join("flake.lock").exists() {
+        if update_inputs && node.path.join("flake.lock").exists() {
             steps.push(exec::ExecutionStep {
                 id: "update-inputs".to_string(),
                 mode: exec::ExecutionMode::Mutating,
@@ -1878,7 +1853,7 @@ fn cmd_sync(
         }
 
         // Push (unless --no-push)
-        if !no_push {
+        if push_outputs && !no_push {
             steps.push(exec::ExecutionStep {
                 id: "git-push".to_string(),
                 mode: exec::ExecutionMode::Mutating,
