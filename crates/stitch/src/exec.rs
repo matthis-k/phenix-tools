@@ -49,8 +49,13 @@ pub struct ExecutionScope {
 
 #[derive(Debug, Clone)]
 pub enum StepKind {
-    Shell { argv: Vec<String> },
-    Builtin { name: String, args: serde_json::Value },
+    Shell {
+        argv: Vec<String>,
+    },
+    Builtin {
+        name: String,
+        args: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -127,7 +132,9 @@ pub fn parse_selection_mode(s: &str) -> Result<SelectionMode, String> {
         "dirty" => Ok(SelectionMode::Dirty),
         "current" => Ok(SelectionMode::Current),
         "explicit" => Ok(SelectionMode::Explicit),
-        _ => Err(format!("Unknown selection mode: {s} (use: all, changed, dirty, current, explicit)")),
+        _ => Err(format!(
+            "Unknown selection mode: {s} (use: all, changed, dirty, current, explicit)"
+        )),
     }
 }
 
@@ -159,7 +166,9 @@ pub fn parse_execution_mode(s: &str) -> Result<ExecutionMode, String> {
     match s.to_lowercase().as_str() {
         "readonly" | "read-only" => Ok(ExecutionMode::ReadOnly),
         "mutating" => Ok(ExecutionMode::Mutating),
-        _ => Err(format!("Unknown execution mode: {s} (use: readonly, mutating)")),
+        _ => Err(format!(
+            "Unknown execution mode: {s} (use: readonly, mutating)"
+        )),
     }
 }
 
@@ -188,17 +197,28 @@ fn load_topology(cfg: &WorkspaceConfig) -> Result<BTreeMap<String, (u32, String)
         .map_err(|e| format!("Failed to read topology {}: {e}", topo_path.display()))?;
     let val: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse topology {}: {e}", topo_path.display()))?;
-    let repos = val.get("repos").and_then(|v| v.as_array())
-        .ok_or_else(|| format!("Topology file {} missing 'repos' array", topo_path.display()))?;
+    let repos = val.get("repos").and_then(|v| v.as_array()).ok_or_else(|| {
+        format!(
+            "Topology file {} missing 'repos' array",
+            topo_path.display()
+        )
+    })?;
 
     if repos.is_empty() {
-        return Err(format!("Topology file {} has empty 'repos' array", topo_path.display()));
+        return Err(format!(
+            "Topology file {} has empty 'repos' array",
+            topo_path.display()
+        ));
     }
 
     let mut topo = BTreeMap::new();
     for repo in repos {
-        let name = repo.get("name").and_then(|v| v.as_str())
-            .ok_or_else(|| format!("Topology entry in {} missing 'name' field", topo_path.display()))?;
+        let name = repo.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+            format!(
+                "Topology entry in {} missing 'name' field",
+                topo_path.display()
+            )
+        })?;
         let role = repo
             .get("role")
             .and_then(|v| v.as_str())
@@ -282,10 +302,9 @@ fn build_dependency_graph(cfg: &WorkspaceConfig) -> Result<DependencyGraph, Stri
         dependents.entry(name.clone()).or_default();
     }
 
-    let root = cfg
-        .config_dir
-        .as_deref()
-        .ok_or_else(|| "Cannot derive Stitch DAG: workspace config directory is unavailable".to_string())?;
+    let root = cfg.config_dir.as_deref().ok_or_else(|| {
+        "Cannot derive Stitch DAG: workspace config directory is unavailable".to_string()
+    })?;
     let metadata = root.join(".stitch").join("topology.json");
     if !metadata.exists() {
         return Err(format!(
@@ -296,7 +315,8 @@ fn build_dependency_graph(cfg: &WorkspaceConfig) -> Result<DependencyGraph, Stri
 
     let dag = graph::derive::derive_graph_from_locks(root, Some(&metadata))
         .map_err(|e| format!("Cannot derive Stitch DAG from canonical topology: {e}"))?;
-    let report = graph::validate::validate_graph(&dag, &graph::validate::ValidateOptions::default());
+    let report =
+        graph::validate::validate_graph(&dag, &graph::validate::ValidateOptions::default());
     if !report.valid {
         let messages = report
             .diagnostics
@@ -315,7 +335,9 @@ fn build_dependency_graph(cfg: &WorkspaceConfig) -> Result<DependencyGraph, Stri
                 edge.from, edge.to
             ));
         }
-        deps.entry(edge.from.clone()).or_default().push(edge.to.clone());
+        deps.entry(edge.from.clone())
+            .or_default()
+            .push(edge.to.clone());
         dependents.entry(edge.to).or_default().push(edge.from);
     }
 
@@ -346,7 +368,8 @@ pub fn install_hooks_for_repo(
     let is_root = repo_name == "phenix";
     let sub_path = repo_path.strip_prefix(workspace_root).unwrap_or(repo_path);
     let pre_commit_cmd = if is_root {
-        "nix develop .#default --command tend check --profile git-hook --staged --affected-dag".to_string()
+        "nix develop .#default --command tend check --profile git-hook --staged --affected-dag"
+            .to_string()
     } else {
         format!(
             "nix develop {root}/#default --command tend check --root {sub} --profile git-hook --staged",
@@ -419,10 +442,7 @@ fn topological_sort(
         if let Some(providers) = deps.get(n) {
             for p in providers {
                 if node_set.contains(p) {
-                    out_edges
-                        .entry(p.clone())
-                        .or_default()
-                        .push(n.clone());
+                    out_edges.entry(p.clone()).or_default().push(n.clone());
                     *in_degree.entry(n.clone()).or_insert(0) += 1;
                 }
             }
@@ -522,9 +542,15 @@ fn expand_closure(
             result.into_iter().collect()
         }
         ClosureMode::Connected => {
-            let upstream = expand_closure(selected, ClosureMode::Upstream, all_nodes, deps, dependents);
-            let downstream =
-                expand_closure(selected, ClosureMode::Downstream, all_nodes, deps, dependents);
+            let upstream =
+                expand_closure(selected, ClosureMode::Upstream, all_nodes, deps, dependents);
+            let downstream = expand_closure(
+                selected,
+                ClosureMode::Downstream,
+                all_nodes,
+                deps,
+                dependents,
+            );
             let mut combined: BTreeSet<String> = BTreeSet::new();
             for n in upstream {
                 combined.insert(n);
@@ -679,9 +705,7 @@ pub fn build_plan(
                     StepCondition::DirectlyChanged => node.directly_changed,
                     StepCondition::DownstreamOnly => node.downstream_only,
                     StepCondition::HasLockfile => has_lock,
-                    StepCondition::HasChangedInputs => {
-                        node.downstream_only && has_lock
-                    }
+                    StepCondition::HasChangedInputs => node.downstream_only && has_lock,
                 }
             })
             .cloned()
@@ -814,7 +838,8 @@ fn execute_step(node: &ExecutionNode, step: &ExecutionStep, cfg: &WorkspaceConfi
                     step_id: step.id.clone(),
                     success: false,
                     stdout: String::new(),
-                    stderr: "Shell step has empty argv; provide a program or shell command".to_string(),
+                    stderr: "Shell step has empty argv; provide a program or shell command"
+                        .to_string(),
                 };
             }
             let program = &argv[0];
@@ -851,7 +876,12 @@ fn execute_step(node: &ExecutionNode, step: &ExecutionStep, cfg: &WorkspaceConfi
     }
 }
 
-fn run_builtin(node: &ExecutionNode, cfg: &WorkspaceConfig, name: &str, args: &serde_json::Value) -> StepResult {
+fn run_builtin(
+    node: &ExecutionNode,
+    cfg: &WorkspaceConfig,
+    name: &str,
+    args: &serde_json::Value,
+) -> StepResult {
     match name {
         "git.status" => builtin_git_status(node),
         "git.collect-status" => builtin_git_collect_status(node, cfg),
@@ -963,7 +993,10 @@ fn builtin_git_collect_status(node: &ExecutionNode, _cfg: &WorkspaceConfig) -> S
 }
 
 fn builtin_git_diff(node: &ExecutionNode, args: &serde_json::Value) -> StepResult {
-    let staged = args.get("staged").and_then(|v| v.as_bool()).unwrap_or(false);
+    let staged = args
+        .get("staged")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let mut cmd_args = vec!["diff"];
     if staged {
         cmd_args.push("--cached");
@@ -990,7 +1023,11 @@ fn builtin_git_diff(node: &ExecutionNode, args: &serde_json::Value) -> StepResul
     }
 }
 
-fn builtin_git_commit(node: &ExecutionNode, args: &serde_json::Value, _cfg: &WorkspaceConfig) -> StepResult {
+fn builtin_git_commit(
+    node: &ExecutionNode,
+    args: &serde_json::Value,
+    _cfg: &WorkspaceConfig,
+) -> StepResult {
     let message = match args.get("message").and_then(|v| v.as_str()) {
         Some(m) => m.trim(),
         None => {
@@ -1195,7 +1232,8 @@ fn builtin_nix_update_inputs(
     let upstream_names: std::collections::BTreeSet<String> = deps
         .get(&node.name)
         .map(|providers| {
-            let mut result: std::collections::BTreeSet<String> = providers.iter().cloned().collect();
+            let mut result: std::collections::BTreeSet<String> =
+                providers.iter().cloned().collect();
             let mut queue = providers.clone();
             while let Some(provider) = queue.pop() {
                 if let Some(transitive) = deps.get(&provider) {
@@ -1246,9 +1284,7 @@ fn builtin_nix_update_inputs(
                                 let input_rel = Path::new(path_str);
                                 if input_rel.is_relative() {
                                     let input_abs = root_dir.join(input_rel);
-                                    return upstream_paths.iter().any(|(_, rp)| {
-                                        *rp == input_abs
-                                    });
+                                    return upstream_paths.iter().any(|(_, rp)| *rp == input_abs);
                                 }
                             }
                         }
@@ -1510,18 +1546,33 @@ mod tests {
     #[test]
     fn test_parse_selection_mode() {
         assert_eq!(parse_selection_mode("all").unwrap(), SelectionMode::All);
-        assert_eq!(parse_selection_mode("changed").unwrap(), SelectionMode::Changed);
+        assert_eq!(
+            parse_selection_mode("changed").unwrap(),
+            SelectionMode::Changed
+        );
         assert_eq!(parse_selection_mode("dirty").unwrap(), SelectionMode::Dirty);
-        assert_eq!(parse_selection_mode("explicit").unwrap(), SelectionMode::Explicit);
+        assert_eq!(
+            parse_selection_mode("explicit").unwrap(),
+            SelectionMode::Explicit
+        );
         assert!(parse_selection_mode("foo").is_err());
     }
 
     #[test]
     fn test_parse_closure_mode() {
         assert_eq!(parse_closure_mode("self").unwrap(), ClosureMode::SelfOnly);
-        assert_eq!(parse_closure_mode("upstream").unwrap(), ClosureMode::Upstream);
-        assert_eq!(parse_closure_mode("downstream").unwrap(), ClosureMode::Downstream);
-        assert_eq!(parse_closure_mode("connected").unwrap(), ClosureMode::Connected);
+        assert_eq!(
+            parse_closure_mode("upstream").unwrap(),
+            ClosureMode::Upstream
+        );
+        assert_eq!(
+            parse_closure_mode("downstream").unwrap(),
+            ClosureMode::Downstream
+        );
+        assert_eq!(
+            parse_closure_mode("connected").unwrap(),
+            ClosureMode::Connected
+        );
         assert_eq!(parse_closure_mode("all").unwrap(), ClosureMode::All);
         assert!(parse_closure_mode("foo").is_err());
     }
@@ -1529,15 +1580,27 @@ mod tests {
     #[test]
     fn test_parse_order_mode() {
         assert_eq!(parse_order_mode("stable").unwrap(), OrderMode::Stable);
-        assert_eq!(parse_order_mode("providers-first").unwrap(), OrderMode::ProvidersFirst);
-        assert_eq!(parse_order_mode("consumers-first").unwrap(), OrderMode::ConsumersFirst);
+        assert_eq!(
+            parse_order_mode("providers-first").unwrap(),
+            OrderMode::ProvidersFirst
+        );
+        assert_eq!(
+            parse_order_mode("consumers-first").unwrap(),
+            OrderMode::ConsumersFirst
+        );
         assert!(parse_order_mode("foo").is_err());
     }
 
     #[test]
     fn test_parse_execution_mode() {
-        assert_eq!(parse_execution_mode("readonly").unwrap(), ExecutionMode::ReadOnly);
-        assert_eq!(parse_execution_mode("mutating").unwrap(), ExecutionMode::Mutating);
+        assert_eq!(
+            parse_execution_mode("readonly").unwrap(),
+            ExecutionMode::ReadOnly
+        );
+        assert_eq!(
+            parse_execution_mode("mutating").unwrap(),
+            ExecutionMode::Mutating
+        );
         assert!(parse_execution_mode("foo").is_err());
     }
 
@@ -1546,10 +1609,22 @@ mod tests {
         assert_eq!(parse_condition("always").unwrap(), StepCondition::Always);
         assert_eq!(parse_condition("dirty").unwrap(), StepCondition::Dirty);
         assert_eq!(parse_condition("staged").unwrap(), StepCondition::Staged);
-        assert_eq!(parse_condition("directly_changed").unwrap(), StepCondition::DirectlyChanged);
-        assert_eq!(parse_condition("downstream_only").unwrap(), StepCondition::DownstreamOnly);
-        assert_eq!(parse_condition("has_lockfile").unwrap(), StepCondition::HasLockfile);
-        assert_eq!(parse_condition("has_changed_inputs").unwrap(), StepCondition::HasChangedInputs);
+        assert_eq!(
+            parse_condition("directly_changed").unwrap(),
+            StepCondition::DirectlyChanged
+        );
+        assert_eq!(
+            parse_condition("downstream_only").unwrap(),
+            StepCondition::DownstreamOnly
+        );
+        assert_eq!(
+            parse_condition("has_lockfile").unwrap(),
+            StepCondition::HasLockfile
+        );
+        assert_eq!(
+            parse_condition("has_changed_inputs").unwrap(),
+            StepCondition::HasChangedInputs
+        );
         assert!(parse_condition("foo").is_err());
     }
 
@@ -1558,7 +1633,13 @@ mod tests {
         let all = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         let deps: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let dependents: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        let result = expand_closure(&["a".to_string()], ClosureMode::SelfOnly, &all, &deps, &dependents);
+        let result = expand_closure(
+            &["a".to_string()],
+            ClosureMode::SelfOnly,
+            &all,
+            &deps,
+            &dependents,
+        );
         assert_eq!(result, vec!["a"]);
     }
 
@@ -1567,7 +1648,13 @@ mod tests {
         let all = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         let deps: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let dependents: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        let result = expand_closure(&["a".to_string()], ClosureMode::All, &all, &deps, &dependents);
+        let result = expand_closure(
+            &["a".to_string()],
+            ClosureMode::All,
+            &all,
+            &deps,
+            &dependents,
+        );
         assert_eq!(result.len(), 3);
     }
 
@@ -1581,7 +1668,8 @@ mod tests {
         let order = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         // a depends on b, b depends on c
         // providers-first: c, b, a
-        let result = topological_sort(&all_nodes, &deps, &order, OrderMode::ProvidersFirst).unwrap();
+        let result =
+            topological_sort(&all_nodes, &deps, &order, OrderMode::ProvidersFirst).unwrap();
         assert_eq!(result, vec!["c", "b", "a"]);
     }
 
@@ -1594,7 +1682,8 @@ mod tests {
         deps.insert("c".to_string(), vec![]);
         let order = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         // reverse of providers-first: a, b, c
-        let result = topological_sort(&all_nodes, &deps, &order, OrderMode::ConsumersFirst).unwrap();
+        let result =
+            topological_sort(&all_nodes, &deps, &order, OrderMode::ConsumersFirst).unwrap();
         assert_eq!(result, vec!["a", "b", "c"]);
     }
 
@@ -1762,10 +1851,20 @@ mod tests {
             downstream_only: false,
             steps: vec![],
         };
-        let result = run_builtin(&node, &make_test_cfg(), "git.status", &serde_json::json!({}));
+        let result = run_builtin(
+            &node,
+            &make_test_cfg(),
+            "git.status",
+            &serde_json::json!({}),
+        );
         // git status may succeed or fail with "not a git repository" - either is fine
         let stderr_contains = result.stderr.contains("not a git repository");
-        assert!(result.success || stderr_contains, "expected success or not-a-repo error, got stdout={:?} stderr={:?}", result.stdout, result.stderr);
+        assert!(
+            result.success || stderr_contains,
+            "expected success or not-a-repo error, got stdout={:?} stderr={:?}",
+            result.stdout,
+            result.stderr
+        );
     }
 
     #[test]
@@ -1792,7 +1891,13 @@ mod tests {
         dependents.insert("a".to_string(), vec![]);
 
         // Upstream from a: a, b, c (a + its transitive providers)
-        let result = expand_closure(&["a".to_string()], ClosureMode::Upstream, &all_nodes, &deps, &dependents);
+        let result = expand_closure(
+            &["a".to_string()],
+            ClosureMode::Upstream,
+            &all_nodes,
+            &deps,
+            &dependents,
+        );
         let mut sorted: Vec<String> = result;
         sorted.sort();
         assert_eq!(sorted, vec!["a", "b", "c"]);
@@ -1812,7 +1917,13 @@ mod tests {
         dependents.insert("a".to_string(), vec![]);
 
         // Downstream from c: c, b, a (c + its transitive consumers)
-        let result = expand_closure(&["c".to_string()], ClosureMode::Downstream, &all_nodes, &deps, &dependents);
+        let result = expand_closure(
+            &["c".to_string()],
+            ClosureMode::Downstream,
+            &all_nodes,
+            &deps,
+            &dependents,
+        );
         let mut sorted: Vec<String> = result;
         sorted.sort();
         assert_eq!(sorted, vec!["a", "b", "c"]);
@@ -1835,7 +1946,13 @@ mod tests {
         // Upstream of b: b's providers = {c}; b itself. So {b, c}
         // Downstream of b: b's consumers = {a}; b itself. So {a, b}
         // Connected: {a, b, c}
-        let result = expand_closure(&["b".to_string()], ClosureMode::Connected, &all_nodes, &deps, &dependents);
+        let result = expand_closure(
+            &["b".to_string()],
+            ClosureMode::Connected,
+            &all_nodes,
+            &deps,
+            &dependents,
+        );
         let mut sorted: Vec<String> = result;
         sorted.sort();
         assert_eq!(sorted, vec!["a", "b", "c"]);

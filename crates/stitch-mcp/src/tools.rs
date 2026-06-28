@@ -44,10 +44,7 @@ fn run_exec_plan(
     exec::run_plan(cfg, &plan, &opts)
 }
 
-fn collect_status_json(
-    cfg: &stitch::model::WorkspaceConfig,
-    repo_filter: &[String],
-) -> Vec<Value> {
+fn collect_status_json(cfg: &stitch::model::WorkspaceConfig, repo_filter: &[String]) -> Vec<Value> {
     let selection = if repo_filter.is_empty() {
         exec::SelectionMode::All
     } else {
@@ -62,7 +59,14 @@ fn collect_status_json(
         },
         condition: None,
     };
-    let report = match run_exec_plan(cfg, selection, repo_filter.to_vec(), exec::ClosureMode::SelfOnly, exec::OrderMode::Stable, step) {
+    let report = match run_exec_plan(
+        cfg,
+        selection,
+        repo_filter.to_vec(),
+        exec::ClosureMode::SelfOnly,
+        exec::OrderMode::Stable,
+        step,
+    ) {
         Ok(r) => r,
         Err(_) => return Vec::new(),
     };
@@ -105,15 +109,35 @@ impl McpTool for StitchStatusTool {
         let repo_filter: Vec<String> = input
             .get("repos")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .collect()
+            })
             .unwrap_or_default();
-        let dirty_only = input.get("dirty_only").and_then(|v| v.as_bool()).unwrap_or(false);
-        let short = input.get("short").and_then(|v| v.as_bool()).unwrap_or(false);
-        let include_untracked = input.get("include_untracked").and_then(|v| v.as_bool()).unwrap_or(true);
+        let dirty_only = input
+            .get("dirty_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let short = input
+            .get("short")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let include_untracked = input
+            .get("include_untracked")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
 
         let cfg = match stitch::config::find_and_load() {
             Ok(c) => c,
-            Err(e) => return Err(mk_err(ErrorKind::NotFound, &format!("Config: {}", e), &audit_id)),
+            Err(e) => {
+                return Err(mk_err(
+                    ErrorKind::NotFound,
+                    &format!("Config: {}", e),
+                    &audit_id,
+                ))
+            }
         };
 
         let statuses = collect_status_json(&cfg, &repo_filter);
@@ -124,13 +148,19 @@ impl McpTool for StitchStatusTool {
         for s in &statuses {
             let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let is_dirty = s.get("is_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
-            if dirty_only && !is_dirty { continue; }
-            if is_dirty { dirty_repos.push(name.to_string()); }
+            if dirty_only && !is_dirty {
+                continue;
+            }
+            if is_dirty {
+                dirty_repos.push(name.to_string());
+            }
 
             let changes: Vec<String> = if include_untracked {
                 let repo_cfg = cfg.repos.iter().find(|r| r.name == name);
                 repo_cfg
-                    .map(|r| stitch::git::git_diff_names(&r.resolved_path(&cfg)).unwrap_or_default())
+                    .map(|r| {
+                        stitch::git::git_diff_names(&r.resolved_path(&cfg)).unwrap_or_default()
+                    })
                     .unwrap_or_default()
             } else {
                 vec![]
@@ -143,7 +173,9 @@ impl McpTool for StitchStatusTool {
             }
 
             let untracked_count = if include_untracked {
-                s.get("untracked_count").and_then(|v| v.as_u64()).unwrap_or(0)
+                s.get("untracked_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0)
             } else {
                 0
             };
@@ -196,16 +228,37 @@ impl McpTool for StitchDiffTool {
     }
     fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolFailure> {
         let audit_id = ctx.audit.generate_id();
-        let repo_name = input.get("repo").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let staged = input.get("staged").and_then(|v| v.as_bool()).unwrap_or(false);
+        let repo_name = input
+            .get("repo")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let staged = input
+            .get("staged")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let cfg = match stitch::config::find_and_load() {
             Ok(c) => c,
-            Err(e) => return Err(mk_err(ErrorKind::NotFound, &format!("Config: {}", e), &audit_id)),
+            Err(e) => {
+                return Err(mk_err(
+                    ErrorKind::NotFound,
+                    &format!("Config: {}", e),
+                    &audit_id,
+                ))
+            }
         };
 
-        let explicit_nodes: Vec<String> = if repo_name.is_empty() { Vec::new() } else { vec![repo_name.clone()] };
-        let selection = if repo_name.is_empty() { exec::SelectionMode::All } else { exec::SelectionMode::Explicit };
+        let explicit_nodes: Vec<String> = if repo_name.is_empty() {
+            Vec::new()
+        } else {
+            vec![repo_name.clone()]
+        };
+        let selection = if repo_name.is_empty() {
+            exec::SelectionMode::All
+        } else {
+            exec::SelectionMode::Explicit
+        };
 
         let step = exec::ExecutionStep {
             id: "git-diff".to_string(),
@@ -217,22 +270,44 @@ impl McpTool for StitchDiffTool {
             condition: None,
         };
 
-        let report = match run_exec_plan(&cfg, selection, explicit_nodes, exec::ClosureMode::SelfOnly, exec::OrderMode::Stable, step) {
+        let report = match run_exec_plan(
+            &cfg,
+            selection,
+            explicit_nodes,
+            exec::ClosureMode::SelfOnly,
+            exec::OrderMode::Stable,
+            step,
+        ) {
             Ok(r) => r,
-            Err(e) => return Err(mk_err(ErrorKind::Internal, &format!("Diff failed: {e}"), &audit_id)),
+            Err(e) => {
+                return Err(mk_err(
+                    ErrorKind::Internal,
+                    &format!("Diff failed: {e}"),
+                    &audit_id,
+                ))
+            }
         };
 
         let mut diffs: Vec<Value> = Vec::new();
         for nr in &report.node_results {
             for sr in &nr.step_results {
-                if !sr.success { continue; }
+                if !sr.success {
+                    continue;
+                }
                 let diff_text = sr.stdout.trim().to_string();
                 let files: Vec<String> = if !staged && !diff_text.is_empty() {
-                    diff_text.lines()
+                    diff_text
+                        .lines()
                         .filter_map(|l| {
-                            if l.starts_with("diff --git") { None }
-                            else if l.starts_with("--- ") || l.starts_with("+++ ") || l.starts_with("@@") { None }
-                            else { Some(l.to_string()) }
+                            if l.starts_with("diff --git")
+                                || l.starts_with("--- ")
+                                || l.starts_with("+++ ")
+                                || l.starts_with("@@")
+                            {
+                                None
+                            } else {
+                                Some(l.to_string())
+                            }
                         })
                         .collect()
                 } else {
@@ -282,19 +357,42 @@ impl McpTool for StitchDagTool {
     }
     fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolFailure> {
         let audit_id = ctx.audit.generate_id();
-        let mode = input.get("mode").and_then(|v| v.as_str()).unwrap_or("commit");
-        let split = input.get("split").and_then(|v| v.as_str()).unwrap_or("by-repo");
-        let staged = input.get("staged").and_then(|v| v.as_bool()).unwrap_or(false);
-        let run_tend = input.get("run_tend").and_then(|v| v.as_bool()).unwrap_or(true);
+        let mode = input
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("commit");
+        let split = input
+            .get("split")
+            .and_then(|v| v.as_str())
+            .unwrap_or("by-repo");
+        let staged = input
+            .get("staged")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let run_tend = input
+            .get("run_tend")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
         let repo_filter: Vec<String> = input
             .get("repos")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .collect()
+            })
             .unwrap_or_default();
 
         let cfg = match stitch::config::find_and_load() {
             Ok(c) => c,
-            Err(e) => return Err(mk_err(ErrorKind::NotFound, &format!("Config: {}", e), &audit_id)),
+            Err(e) => {
+                return Err(mk_err(
+                    ErrorKind::NotFound,
+                    &format!("Config: {}", e),
+                    &audit_id,
+                ))
+            }
         };
 
         let statuses = collect_status_json(&cfg, &repo_filter);
@@ -303,7 +401,9 @@ impl McpTool for StitchDagTool {
         for s in &statuses {
             let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let is_dirty = s.get("is_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
-            if !is_dirty { continue; }
+            if !is_dirty {
+                continue;
+            }
 
             let repo_cfg = match cfg.repos.iter().find(|r| r.name == name) {
                 Some(r) => r,
@@ -330,7 +430,10 @@ impl McpTool for StitchDagTool {
                 "by-path" => {
                     let mut by_dir: HashMap<String, Vec<String>> = HashMap::new();
                     for f in &diff {
-                        let dir = f.rfind('/').map(|i| f[..i].to_string()).unwrap_or_else(|| "root".to_string());
+                        let dir = f
+                            .rfind('/')
+                            .map(|i| f[..i].to_string())
+                            .unwrap_or_else(|| "root".to_string());
                         by_dir.entry(dir).or_default().push(f.clone());
                     }
                     for (dir, files) in &by_dir {
@@ -373,7 +476,10 @@ impl McpTool for StitchDagTool {
                 .collect();
 
             if !commit_ids.is_empty() {
-                let root_repo = cfg.repos.iter().find(|r| r.name.contains("root") || r.name == "phenix");
+                let root_repo = cfg
+                    .repos
+                    .iter()
+                    .find(|r| r.name.contains("root") || r.name == "phenix");
                 if let Some(root) = root_repo {
                     nodes.push(json!({
                         "id": format!("{}:update-pins", root.name),
@@ -417,7 +523,10 @@ impl McpTool for StitchCommitTemplateTool {
     fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolFailure> {
         let audit_id = ctx.audit.generate_id();
         let _dag_id = input.get("dag_id").and_then(|v| v.as_str());
-        let staged = input.get("staged").and_then(|v| v.as_bool()).unwrap_or(false);
+        let staged = input
+            .get("staged")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let cfg = stitch::config::find_and_load().unwrap_or(stitch::model::WorkspaceConfig {
             version: 1,
@@ -432,7 +541,9 @@ impl McpTool for StitchCommitTemplateTool {
         for s in &statuses {
             let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let is_dirty = s.get("is_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
-            if !is_dirty { continue; }
+            if !is_dirty {
+                continue;
+            }
 
             let repo_cfg = match cfg.repos.iter().find(|r| r.name == name) {
                 Some(r) => r,
@@ -495,18 +606,40 @@ impl McpTool for StitchCommitTool {
     }
     fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolFailure> {
         let audit_id = ctx.audit.generate_id();
-        let apply = input.get("apply").and_then(|v| v.as_bool()).unwrap_or(false);
-        let dry_run = input.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
-        let no_push = input.get("no_push").and_then(|v| v.as_bool()).unwrap_or(false);
-        let force = input.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+        let apply = input
+            .get("apply")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let dry_run = input
+            .get("dry_run")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let no_push = input
+            .get("no_push")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let force = input
+            .get("force")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         if !apply && !dry_run {
-            return Err(mk_err(ErrorKind::PolicyDenied, "Must set apply=true to execute, or use dry_run=true for plan-only", &audit_id));
+            return Err(mk_err(
+                ErrorKind::PolicyDenied,
+                "Must set apply=true to execute, or use dry_run=true for plan-only",
+                &audit_id,
+            ));
         }
 
         let cfg = match stitch::config::find_and_load() {
             Ok(c) => c,
-            Err(e) => return Err(mk_err(ErrorKind::NotFound, &format!("Config: {}", e), &audit_id)),
+            Err(e) => {
+                return Err(mk_err(
+                    ErrorKind::NotFound,
+                    &format!("Config: {}", e),
+                    &audit_id,
+                ))
+            }
         };
 
         let scope = exec::ExecutionScope {
@@ -518,36 +651,62 @@ impl McpTool for StitchCommitTool {
 
         let raw_nodes = match exec::build_scope(&cfg, &scope) {
             Ok(n) => n,
-            Err(e) => return Err(mk_err(ErrorKind::Internal, &format!("Scope build failed: {}", e), &audit_id)),
+            Err(e) => {
+                return Err(mk_err(
+                    ErrorKind::Internal,
+                    &format!("Scope build failed: {}", e),
+                    &audit_id,
+                ))
+            }
         };
 
-        let dirty_nodes: Vec<&exec::ExecutionNode> = raw_nodes.iter().filter(|n| n.directly_changed).collect();
+        let dirty_nodes: Vec<&exec::ExecutionNode> =
+            raw_nodes.iter().filter(|n| n.directly_changed).collect();
 
         if dirty_nodes.is_empty() && dry_run {
-            let out = ToolResult::ok(json!({"actions": [], "message": "Nothing to commit"}), "No changes to commit", &audit_id);
+            let out = ToolResult::ok(
+                json!({"actions": [], "message": "Nothing to commit"}),
+                "No changes to commit",
+                &audit_id,
+            );
             return Ok(serde_json::to_value(&out).unwrap_or_default());
         }
 
         // Load messages from input
-        let messages: Option<BTreeMap<String, String>> = input.get("messages").and_then(|v| v.as_object()).map(|obj| {
-            obj.iter()
-                .map(|(k, v)| {
-                    let msg = v.get("subject").and_then(|s| s.as_str()).unwrap_or(k);
-                    (k.clone(), msg.to_string())
-                })
-                .collect()
-        });
+        let messages: Option<BTreeMap<String, String>> = input
+            .get("messages")
+            .and_then(|v| v.as_object())
+            .map(|obj| {
+                obj.iter()
+                    .map(|(k, v)| {
+                        let msg = v.get("subject").and_then(|s| s.as_str()).unwrap_or(k);
+                        (k.clone(), msg.to_string())
+                    })
+                    .collect()
+            });
 
         if dirty_nodes.is_empty() {
-            return Err(mk_err(ErrorKind::NotFound, "No dirty nodes to commit", &audit_id));
+            return Err(mk_err(
+                ErrorKind::NotFound,
+                "No dirty nodes to commit",
+                &audit_id,
+            ));
         }
 
         // Build per-node commit + push steps
         let mut commit_nodes: Vec<exec::ExecutionNode> = Vec::new();
         for node in dirty_nodes {
-            let msg = messages.as_ref().and_then(|m| m.get(&node.name)).cloned().unwrap_or_default();
+            let msg = messages
+                .as_ref()
+                .and_then(|m| m.get(&node.name))
+                .cloned()
+                .unwrap_or_default();
             if msg.is_empty() && !dry_run && !force {
-                return Err(mk_err(ErrorKind::InvalidInput, &format!("Missing commit message for '{}'", node.name), &audit_id));
+                return Err(mk_err(
+                    ErrorKind::InvalidInput,
+                    &format!("Missing commit message for '{}'", node.name),
+                    &audit_id,
+                ));
             }
 
             let mut steps = Vec::new();
@@ -578,12 +737,16 @@ impl McpTool for StitchCommitTool {
             commit_nodes.push(n);
         }
 
-        let plan = exec::ExecutionPlan { nodes: commit_nodes };
+        let plan = exec::ExecutionPlan {
+            nodes: commit_nodes,
+        };
 
         if dry_run {
-            let action_list: Vec<Value> = plan.nodes.iter().map(|n| {
-                json!({"type": "commit", "node": n.name})
-            }).collect();
+            let action_list: Vec<Value> = plan
+                .nodes
+                .iter()
+                .map(|n| json!({"type": "commit", "node": n.name}))
+                .collect();
             let out = ToolResult::ok(
                 json!({"actions": action_list, "nodes": plan.nodes.iter().map(|n| {
                     json!({"name": n.name, "directly_changed": n.directly_changed})
@@ -602,7 +765,9 @@ impl McpTool for StitchCommitTool {
 
         match exec::run_plan(&cfg, &plan, &opts) {
             Ok(report) => {
-                let created_commits: Vec<String> = report.node_results.iter()
+                let created_commits: Vec<String> = report
+                    .node_results
+                    .iter()
                     .filter(|nr| nr.success)
                     .map(|nr| nr.node.clone())
                     .collect();
@@ -620,12 +785,19 @@ impl McpTool for StitchCommitTool {
                         "successful": report.successful_nodes,
                         "failed": report.failed_nodes,
                     }),
-                    format!("{} node(s) committed, {} succeeded", report.total_nodes, report.successful_nodes),
+                    format!(
+                        "{} node(s) committed, {} succeeded",
+                        report.total_nodes, report.successful_nodes
+                    ),
                     &audit_id,
                 );
                 Ok(serde_json::to_value(&out).unwrap_or_default())
             }
-            Err(e) => Err(mk_err(ErrorKind::Internal, &format!("Commit execution failed: {}", e), &audit_id)),
+            Err(e) => Err(mk_err(
+                ErrorKind::Internal,
+                &format!("Commit execution failed: {}", e),
+                &audit_id,
+            )),
         }
     }
 }
@@ -654,28 +826,63 @@ impl McpTool for StitchSyncTool {
     }
     fn call(&self, input: Value, ctx: &ToolContext) -> Result<Value, ToolFailure> {
         let audit_id = ctx.audit.generate_id();
-        let apply = input.get("apply").and_then(|v| v.as_bool()).unwrap_or(false);
-        let dry_run = input.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false);
-        let no_push = input.get("no_push").and_then(|v| v.as_bool()).unwrap_or(false);
-        let run_tend = input.get("run_tend").and_then(|v| v.as_bool()).unwrap_or(false);
+        let apply = input
+            .get("apply")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let dry_run = input
+            .get("dry_run")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let no_push = input
+            .get("no_push")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let run_tend = input
+            .get("run_tend")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let _mode = input.get("mode").and_then(|v| v.as_str()).unwrap_or("push");
         let repo_filter: Vec<String> = input
             .get("repos")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str()).map(|s| s.to_string()).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .collect()
+            })
             .unwrap_or_default();
 
         if !apply && !dry_run {
-            return Err(mk_err(ErrorKind::PolicyDenied, "Must set apply=true or dry_run=true", &audit_id));
+            return Err(mk_err(
+                ErrorKind::PolicyDenied,
+                "Must set apply=true or dry_run=true",
+                &audit_id,
+            ));
         }
 
         let cfg = match stitch::config::find_and_load() {
             Ok(c) => c,
-            Err(e) => return Err(mk_err(ErrorKind::NotFound, &format!("Config: {}", e), &audit_id)),
+            Err(e) => {
+                return Err(mk_err(
+                    ErrorKind::NotFound,
+                    &format!("Config: {}", e),
+                    &audit_id,
+                ))
+            }
         };
 
-        let explicit_nodes = if repo_filter.is_empty() { Vec::new() } else { repo_filter };
-        let selection = if explicit_nodes.is_empty() { exec::SelectionMode::Changed } else { exec::SelectionMode::Explicit };
+        let explicit_nodes = if repo_filter.is_empty() {
+            Vec::new()
+        } else {
+            repo_filter
+        };
+        let selection = if explicit_nodes.is_empty() {
+            exec::SelectionMode::Changed
+        } else {
+            exec::SelectionMode::Explicit
+        };
         let scope = exec::ExecutionScope {
             selection,
             explicit_nodes,
@@ -685,15 +892,26 @@ impl McpTool for StitchSyncTool {
 
         let raw_nodes = match exec::build_scope(&cfg, &scope) {
             Ok(n) => n,
-            Err(e) => return Err(mk_err(ErrorKind::Internal, &format!("Scope build failed: {}", e), &audit_id)),
+            Err(e) => {
+                return Err(mk_err(
+                    ErrorKind::Internal,
+                    &format!("Scope build failed: {}", e),
+                    &audit_id,
+                ))
+            }
         };
 
-        let active_nodes: Vec<&exec::ExecutionNode> = raw_nodes.iter()
+        let active_nodes: Vec<&exec::ExecutionNode> = raw_nodes
+            .iter()
             .filter(|n| n.directly_changed || n.downstream_only)
             .collect();
 
         if active_nodes.is_empty() && dry_run {
-            let out = ToolResult::ok(json!({"actions": [], "message": "Nothing to sync"}), "No changes to sync", &audit_id);
+            let out = ToolResult::ok(
+                json!({"actions": [], "message": "Nothing to sync"}),
+                "No changes to sync",
+                &audit_id,
+            );
             return Ok(serde_json::to_value(&out).unwrap_or_default());
         }
 
@@ -746,12 +964,20 @@ impl McpTool for StitchSyncTool {
         }
 
         if sync_nodes.is_empty() && dry_run {
-            let out = ToolResult::ok(json!({"actions": [], "message": "Nothing to sync"}), "No steps to execute", &audit_id);
+            let out = ToolResult::ok(
+                json!({"actions": [], "message": "Nothing to sync"}),
+                "No steps to execute",
+                &audit_id,
+            );
             return Ok(serde_json::to_value(&out).unwrap_or_default());
         }
 
         if sync_nodes.is_empty() {
-            return Err(mk_err(ErrorKind::NotFound, "No sync steps to execute", &audit_id));
+            return Err(mk_err(
+                ErrorKind::NotFound,
+                "No sync steps to execute",
+                &audit_id,
+            ));
         }
 
         let plan = exec::ExecutionPlan { nodes: sync_nodes };
@@ -762,13 +988,21 @@ impl McpTool for StitchSyncTool {
             }).collect();
             let out = ToolResult::ok(
                 json!({"actions": action_list, "total": plan.nodes.len()}),
-                format!("Sync plan: {} node(s) with {} step(s)", plan.nodes.len(), plan.nodes.iter().map(|n| n.steps.len()).sum::<usize>()),
+                format!(
+                    "Sync plan: {} node(s) with {} step(s)",
+                    plan.nodes.len(),
+                    plan.nodes.iter().map(|n| n.steps.len()).sum::<usize>()
+                ),
                 &audit_id,
             );
             return Ok(serde_json::to_value(&out).unwrap_or_default());
         }
 
-        let opts = exec::RunOptions { dry_run: false, apply: true, json: false };
+        let opts = exec::RunOptions {
+            dry_run: false,
+            apply: true,
+            json: false,
+        };
 
         match exec::run_plan(&cfg, &plan, &opts) {
             Ok(report) => {
@@ -777,12 +1011,19 @@ impl McpTool for StitchSyncTool {
                 }).collect();
                 let out = ToolResult::ok(
                     json!({"completed": results, "total": report.total_nodes, "successful": report.successful_nodes, "failed": report.failed_nodes}),
-                    format!("{} node(s) synced, {} succeeded", report.total_nodes, report.successful_nodes),
+                    format!(
+                        "{} node(s) synced, {} succeeded",
+                        report.total_nodes, report.successful_nodes
+                    ),
                     &audit_id,
                 );
                 Ok(serde_json::to_value(&out).unwrap_or_default())
             }
-            Err(e) => Err(mk_err(ErrorKind::Internal, &format!("Sync execution failed: {}", e), &audit_id)),
+            Err(e) => Err(mk_err(
+                ErrorKind::Internal,
+                &format!("Sync execution failed: {}", e),
+                &audit_id,
+            )),
         }
     }
 }

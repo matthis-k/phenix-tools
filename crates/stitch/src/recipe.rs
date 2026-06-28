@@ -81,15 +81,15 @@ pub fn load_recipes(root: &Path) -> Result<RecipeCollection, String> {
     let collection: RecipeCollection = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse {}: {}", recipes_path.display(), e))?;
     if collection.version < 1 {
-        return Err(format!(
-            "Unsupported recipe version {}",
-            collection.version
-        ));
+        return Err(format!("Unsupported recipe version {}", collection.version));
     }
     Ok(collection)
 }
 
-pub fn find_recipe<'a>(collection: &'a RecipeCollection, name: &str) -> Result<&'a RecipeDef, String> {
+pub fn find_recipe<'a>(
+    collection: &'a RecipeCollection,
+    name: &str,
+) -> Result<&'a RecipeDef, String> {
     collection
         .recipes
         .iter()
@@ -109,9 +109,7 @@ pub fn resolve_recipe(recipe: &RecipeDef) -> Result<RecipeResolved, String> {
             if run.is_empty() {
                 return Err(format!("Step '{}': empty run command", step_def.id));
             }
-            StepKind::Shell {
-                argv: run.clone(),
-            }
+            StepKind::Shell { argv: run.clone() }
         } else if let Some(ref builtin) = step_def.builtin {
             if !KNOWN_BUILTINS.contains(&builtin.as_str()) {
                 return Err(format!(
@@ -169,10 +167,7 @@ pub struct RecipeResolved {
 
 pub fn list_recipes(collection: &RecipeCollection, json: bool) {
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&collection).unwrap()
-        );
+        println!("{}", serde_json::to_string_pretty(&collection).unwrap());
     } else {
         if collection.recipes.is_empty() {
             println!("No recipes found in .stitch/recipes.json");
@@ -245,10 +240,7 @@ pub fn run_recipe(
     } else {
         println!(
             "Recipe '{}' completed: {}/{} nodes successful, {} failed",
-            resolved.name,
-            report.successful_nodes,
-            report.total_nodes,
-            report.failed_nodes
+            resolved.name, report.successful_nodes, report.total_nodes, report.failed_nodes
         );
     }
 
@@ -269,7 +261,11 @@ mod tests {
             order: "stable".to_string(),
             steps: vec![RecipeStepDef {
                 id: "git-status".to_string(),
-                run: Some(vec!["git".to_string(), "status".to_string(), "--short".to_string()]),
+                run: Some(vec![
+                    "git".to_string(),
+                    "status".to_string(),
+                    "--short".to_string(),
+                ]),
                 builtin: None,
                 if_field: None,
                 args: None,

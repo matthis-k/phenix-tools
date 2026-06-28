@@ -161,6 +161,9 @@
                 pkgs.rustc
                 pkgs.rustfmt
                 pkgs.clippy
+                pkgs.nixfmt
+                pkgs.statix
+                pkgs.deadnix
                 pkgs.stdenv.cc
               ];
               inherit cargoDeps;
@@ -190,7 +193,7 @@
               # git is needed by tend for changed-file detection
               git init && git add -A
 
-              tend run --mode full --phase verify
+              tend run --mode full --phase verify --profile nix-check
 
               touch $out
             '';

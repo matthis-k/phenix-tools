@@ -286,7 +286,10 @@ fn cmd_hooks(command: &HooksCommand) -> Result<(), String> {
         HooksCommand::Plan { all, repo } => {
             let cfg = config::find_and_load()?;
             let targets: Vec<_> = if let Some(name) = repo {
-                let r = cfg.repos.iter().find(|r| r.name == *name)
+                let r = cfg
+                    .repos
+                    .iter()
+                    .find(|r| r.name == *name)
                     .ok_or_else(|| format!("Repo '{}' not found", name))?;
                 vec![r]
             } else if *all {
@@ -329,7 +332,10 @@ fn cmd_hooks(command: &HooksCommand) -> Result<(), String> {
         HooksCommand::Install { all, repo, force } => {
             let cfg = config::find_and_load()?;
             let targets: Vec<_> = if let Some(name) = repo {
-                vec![cfg.repos.iter().find(|r| r.name == *name)
+                vec![cfg
+                    .repos
+                    .iter()
+                    .find(|r| r.name == *name)
                     .ok_or_else(|| format!("Repo '{}' not found", name))?]
             } else if *all {
                 cfg.repos.iter().collect()
@@ -382,7 +388,10 @@ fn validate_single_selection(
         return Err("Must specify one of: --all, --changed, --dirty, --node, --nodes".to_string());
     }
     if count > 1 {
-        return Err("Must specify exactly one selection mode (--all, --changed, --dirty, --node, --nodes)".to_string());
+        return Err(
+            "Must specify exactly one selection mode (--all, --changed, --dirty, --node, --nodes)"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -438,15 +447,13 @@ fn cmd_exec(
         steps
             .iter()
             .enumerate()
-            .map(|(idx, s)| {
-                exec::ExecutionStep {
-                    id: format!("step-{}", idx + 1),
-                    mode: exec_mode,
-                    kind: exec::StepKind::Shell {
-                        argv: vec!["sh".to_string(), "-c".to_string(), s.to_string()],
-                    },
-                    condition: None,
-                }
+            .map(|(idx, s)| exec::ExecutionStep {
+                id: format!("step-{}", idx + 1),
+                mode: exec_mode,
+                kind: exec::StepKind::Shell {
+                    argv: vec!["sh".to_string(), "-c".to_string(), s.to_string()],
+                },
+                condition: None,
             })
             .collect()
     } else {
@@ -769,11 +776,7 @@ enum Commands {
     },
     /// Sync/update/push in dependency order (update flake inputs, validate, push)
     Sync {
-        #[arg(
-            long,
-            default_value = "push",
-            help = "Mode: pull, push, full"
-        )]
+        #[arg(long, default_value = "push", help = "Mode: pull, push, full")]
         mode: Option<String>,
         #[arg(long, help = "Apply (required for actual sync operations)")]
         apply: bool,
@@ -810,11 +813,23 @@ enum Commands {
         node: Option<String>,
         #[arg(long, value_delimiter = ',', help = "Select multiple nodes by name")]
         nodes: Vec<String>,
-        #[arg(long, default_value = "self", help = "Closure mode: self, upstream, downstream, connected, all")]
+        #[arg(
+            long,
+            default_value = "self",
+            help = "Closure mode: self, upstream, downstream, connected, all"
+        )]
         closure: String,
-        #[arg(long, default_value = "stable", help = "Order mode: stable, providers-first, consumers-first")]
+        #[arg(
+            long,
+            default_value = "stable",
+            help = "Order mode: stable, providers-first, consumers-first"
+        )]
         order: String,
-        #[arg(long, default_value = "readonly", help = "Execution mode: readonly, mutating")]
+        #[arg(
+            long,
+            default_value = "readonly",
+            help = "Execution mode: readonly, mutating"
+        )]
         mode: String,
         #[arg(long, help = "Step command (can be specified multiple times)")]
         step: Vec<String>,
@@ -879,7 +894,11 @@ enum RecipeCommand {
         name: String,
         #[arg(long, help = "Override selection with a specific node")]
         node: Option<String>,
-        #[arg(long, value_delimiter = ',', help = "Override selection with multiple nodes")]
+        #[arg(
+            long,
+            value_delimiter = ',',
+            help = "Override selection with multiple nodes"
+        )]
         nodes: Vec<String>,
         #[arg(long, help = "Output as JSON")]
         json: bool,
@@ -890,7 +909,11 @@ enum RecipeCommand {
         name: String,
         #[arg(long, help = "Override selection with a specific node")]
         node: Option<String>,
-        #[arg(long, value_delimiter = ',', help = "Override selection with multiple nodes")]
+        #[arg(
+            long,
+            value_delimiter = ',',
+            help = "Override selection with multiple nodes"
+        )]
         nodes: Vec<String>,
         #[arg(long, help = "Dry run (show plan, no mutations)")]
         dry_run: bool,
@@ -1156,9 +1179,18 @@ fn cmd_status(
         let branch = s.get("branch").and_then(|v| v.as_str()).unwrap_or("?");
         let is_dirty = s.get("is_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
         let staged_count = s.get("staged_count").and_then(|v| v.as_u64()).unwrap_or(0);
-        let unstaged_count = s.get("unstaged_count").and_then(|v| v.as_u64()).unwrap_or(0);
-        let untracked_count = s.get("untracked_count").and_then(|v| v.as_u64()).unwrap_or(0);
-        let is_present = s.get("is_present").and_then(|v| v.as_bool()).unwrap_or(false);
+        let unstaged_count = s
+            .get("unstaged_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let untracked_count = s
+            .get("untracked_count")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let is_present = s
+            .get("is_present")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let dirty = if is_dirty { "yes" } else { "no" };
         println!("{}", name);
@@ -1274,8 +1306,15 @@ mod tests {
     #[test]
     fn selection_rejects_ambiguous_modes() {
         assert!(validate_single_selection(true, true, false, None, &[], true).is_err());
-        assert!(validate_single_selection(false, false, false, Some("a"), &["b".to_string()], true)
-            .is_err());
+        assert!(validate_single_selection(
+            false,
+            false,
+            false,
+            Some("a"),
+            &["b".to_string()],
+            true
+        )
+        .is_err());
     }
 }
 
@@ -1461,10 +1500,14 @@ fn cmd_push(dry_run: bool, json_output: bool) -> Result<(), String> {
                 .iter()
                 .map(|(n, ahead)| serde_json::json!({"name": n.name, "ahead": ahead}))
                 .collect();
-            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                "push_order": to_push.iter().map(|(n, _)| n.name.clone()).collect::<Vec<_>>(),
-                "nodes": nodes
-            })).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "push_order": to_push.iter().map(|(n, _)| n.name.clone()).collect::<Vec<_>>(),
+                    "nodes": nodes
+                }))
+                .unwrap()
+            );
         } else {
             println!("Would push (dependency order):");
             for (node, ahead) in &to_push {
@@ -1502,9 +1545,13 @@ fn cmd_push(dry_run: bool, json_output: bool) -> Result<(), String> {
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "pushed": results
-        })).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "pushed": results
+            }))
+            .unwrap()
+        );
     }
 
     if report.failed_nodes > 0 {
@@ -1576,7 +1623,11 @@ fn cmd_commit(
             condition: None,
         }];
         let plan = exec::build_plan(&cfg, &scope, steps)?;
-        let opts = exec::RunOptions { dry_run: false, apply: false, json: false };
+        let opts = exec::RunOptions {
+            dry_run: false,
+            apply: false,
+            json: false,
+        };
         let report = exec::run_plan(&cfg, &plan, &opts)?;
 
         let mut template = serde_json::Map::new();
@@ -1585,11 +1636,18 @@ fn cmd_commit(
                 if sr.success && !sr.stdout.is_empty() {
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&sr.stdout) {
                         let name = val.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                        let is_dirty = val.get("is_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
-                        if !is_dirty { continue; }
+                        let is_dirty = val
+                            .get("is_dirty")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        if !is_dirty {
+                            continue;
+                        }
                         let repo_cfg = cfg.repos.iter().find(|r| r.name == name);
                         let diff = repo_cfg
-                            .map(|r| git::git_diff_names(&r.resolved_path(&cfg)).unwrap_or_default())
+                            .map(|r| {
+                                git::git_diff_names(&r.resolved_path(&cfg)).unwrap_or_default()
+                            })
                             .unwrap_or_default();
                         template.insert(
                             name.to_string(),
@@ -1632,7 +1690,8 @@ fn cmd_commit(
     };
 
     let raw_nodes = exec::build_scope(&cfg, &scope)?;
-    let dirty_nodes: Vec<&exec::ExecutionNode> = raw_nodes.iter().filter(|n| n.directly_changed).collect();
+    let dirty_nodes: Vec<&exec::ExecutionNode> =
+        raw_nodes.iter().filter(|n| n.directly_changed).collect();
 
     if dirty_nodes.is_empty() {
         if json_output {
@@ -1643,7 +1702,8 @@ fn cmd_commit(
         return Ok(());
     }
 
-    let _commit_names: std::collections::BTreeSet<String> = dirty_nodes.iter().map(|n| n.name.clone()).collect();
+    let _commit_names: std::collections::BTreeSet<String> =
+        dirty_nodes.iter().map(|n| n.name.clone()).collect();
 
     let mut messages: Option<BTreeMap<String, String>> = if let Some(path) = messages_path {
         Some(load_commit_messages(path)?)
@@ -1664,7 +1724,7 @@ fn cmd_commit(
         if let Some(m) = message {
             if dirty_nodes.len() != 1 {
                 return Err(
-                    "--message requires --repo when more than one repo has changes".to_string()
+                    "--message requires --repo when more than one repo has changes".to_string(),
                 );
             }
             let subject = m.trim();
@@ -1720,7 +1780,9 @@ fn cmd_commit(
         return Ok(());
     }
 
-    let plan = exec::ExecutionPlan { nodes: commit_nodes };
+    let plan = exec::ExecutionPlan {
+        nodes: commit_nodes,
+    };
 
     if dry_run {
         exec::print_plan(&plan, json_output);
@@ -1752,9 +1814,13 @@ fn cmd_commit(
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "committed": results
-        })).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "committed": results
+            }))
+            .unwrap()
+        );
     }
 
     if report.failed_nodes > 0 {
@@ -1778,7 +1844,11 @@ fn cmd_sync(
         "pull" => (true, false),
         "push" => (false, true),
         "full" => (true, true),
-        other => return Err(format!("Unknown sync mode '{other}' (use: pull, push, full)")),
+        other => {
+            return Err(format!(
+                "Unknown sync mode '{other}' (use: pull, push, full)"
+            ))
+        }
     };
     let cfg = config::find_and_load()?;
 
@@ -1913,9 +1983,13 @@ fn cmd_sync(
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "synced": results
-        })).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "synced": results
+            }))
+            .unwrap()
+        );
     }
 
     if report.failed_nodes > 0 {

@@ -130,6 +130,19 @@
         }
       },
       {
+        "id": "nix-flake-check",
+        "description": "Full Nix flake evaluation check",
+        "phase": "verify",
+        "kind": "command",
+        "command": ["nix", "flake", "check"],
+        "profiles": ["pre-push", "manual"],
+        "tags": ["nix", "full"],
+        "sandbox_safe": false,
+        "mutates": false,
+        "interactive": false,
+        "always": true
+      },
+      {
         "id": "rustfmt-fix",
         "description": "Fix Rust formatting",
         "phase": "fix",

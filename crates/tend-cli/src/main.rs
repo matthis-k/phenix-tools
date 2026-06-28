@@ -191,7 +191,14 @@ fn main() {
             affected_dag,
         } => match Phase::from_str(&phase) {
             Ok(p) => match RunMode::from_str(&mode) {
-                Ok(m) => cmd_run(&root, configs.as_deref(), p, m, profile.as_deref(), affected_dag),
+                Ok(m) => cmd_run(
+                    &root,
+                    configs.as_deref(),
+                    p,
+                    m,
+                    profile.as_deref(),
+                    affected_dag,
+                ),
                 Err(e) => Err(e),
             },
             Err(e) => Err(e),

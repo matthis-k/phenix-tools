@@ -23,8 +23,8 @@ pub fn parse_gitmodules(root: &Path) -> Result<Vec<Submodule>, String> {
     if !gm_path.exists() {
         return Ok(Vec::new());
     }
-    let content =
-        std::fs::read_to_string(&gm_path).map_err(|e| format!("Failed to read .gitmodules: {e}"))?;
+    let content = std::fs::read_to_string(&gm_path)
+        .map_err(|e| format!("Failed to read .gitmodules: {e}"))?;
     let mut submodules = Vec::new();
     let mut current_name: Option<String> = None;
     let mut current_path: Option<String> = None;
@@ -66,19 +66,16 @@ pub fn parse_topology(root: &Path) -> Result<Vec<TopoNode>, String> {
     if !topo_path.exists() {
         return Ok(Vec::new());
     }
-    let content = std::fs::read_to_string(&topo_path)
-        .map_err(|e| format!("Failed to read topology: {e}"))?;
+    let content =
+        std::fs::read_to_string(&topo_path).map_err(|e| format!("Failed to read topology: {e}"))?;
     let val: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse topology JSON: {e}"))?;
-    let repos = val
-        .get("repos")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| {
-            format!(
-                "Malformed topology: missing 'repos' array in {}",
-                topo_path.display()
-            )
-        })?;
+    let repos = val.get("repos").and_then(|v| v.as_array()).ok_or_else(|| {
+        format!(
+            "Malformed topology: missing 'repos' array in {}",
+            topo_path.display()
+        )
+    })?;
 
     let mut topo = Vec::new();
     for repo in repos {
@@ -204,7 +201,9 @@ pub fn run_affected_dag(
     // Determine directly affected nodes
     let root_files_changed = changed_root_files.iter().any(|f| {
         // Check if the file change is a root-local file (not inside any submodule)
-        !submodules.iter().any(|s| f.starts_with(&s.path) || f == &s.path)
+        !submodules
+            .iter()
+            .any(|s| f.starts_with(&s.path) || f == &s.path)
     });
 
     if root_files_changed {
@@ -237,7 +236,9 @@ pub fn run_affected_dag(
             let current_layer = match topo_by_name.get(name.as_str()) {
                 Some(&l) => l,
                 None => {
-                    eprintln!("WARNING: Affected node '{name}' not found in topology (layer unknown)");
+                    eprintln!(
+                        "WARNING: Affected node '{name}' not found in topology (layer unknown)"
+                    );
                     continue;
                 }
             };
