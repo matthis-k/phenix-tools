@@ -4,6 +4,7 @@
   inputs = {
     flake-parts.url = "github:hercules-ci/flake-parts";
     phenix-pins.url = "github:matthis-k/phenix-pins";
+    phenix-opencode.url = "github:matthis-k/phenix-opencode";
     nixpkgs.follows = "phenix-pins/nixpkgs";
   };
 

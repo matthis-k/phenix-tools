@@ -1,6 +1,6 @@
-{ lib, ... }: {
+{ inputs, lib, ... }: {
   perSystem =
-    { config, pkgs, ... }:
+    { config, pkgs, system, ... }:
     let
       filteredSrc = lib.cleanSource ../.;
 
@@ -88,6 +88,8 @@
         tend-mcp = tendMcpPkg;
         stitch-mcp = stitchMcpPkg;
         default = tendCliPkg;
+
+        opencode = inputs.phenix-opencode.packages.${system}.default;
 
         # Wrapper package with all tools on PATH for the local gate
         check = pkgs.writeShellApplication {
@@ -219,6 +221,10 @@
         default = {
           type = "app";
           program = "${tendCliPkg}/bin/tend";
+        };
+        opencode = {
+          type = "app";
+          program = "${inputs.phenix-opencode.packages.${system}.default}/bin/opencode";
         };
         check =
           let
