@@ -31,6 +31,15 @@ pub fn prepare_command(command: &[String], shell: Option<&ShellConfig>) -> Prepa
     }
 
     if let Some(shell) = shell {
+        if let Some(file) = &shell.file {
+            let mut args = vec![file.to_string_lossy().to_string(), "--run".to_string()];
+            args.push(shell_command(command));
+            return PreparedCommand {
+                program: "nix-shell".to_string(),
+                args,
+            };
+        }
+
         let mut args: Vec<String> = Vec::new();
 
         args.push("develop".to_string());
@@ -61,6 +70,23 @@ pub fn prepare_command(command: &[String], shell: Option<&ShellConfig>) -> Prepa
             args: command[1..].to_vec(),
         }
     }
+}
+
+fn shell_command(command: &[String]) -> String {
+    command
+        .iter()
+        .map(|arg| {
+            if arg
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_+-=./:".contains(c))
+            {
+                arg.clone()
+            } else {
+                format!("'{}'", arg.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub fn run_command(
@@ -129,9 +155,11 @@ mod tests {
         ShellConfig {
             flake: flake.map(|s| s.to_string()),
             name: name.map(|s| s.to_string()),
+            file: None,
             impure: None,
             accept_flake_config: None,
             extra_args: None,
+            auto: None,
         }
     }
 
@@ -213,6 +241,19 @@ mod tests {
         assert_eq!(
             prepared.args,
             vec!["develop", "-v", ".#test", "--command", "echo", "hi"]
+        );
+    }
+
+    #[test]
+    fn test_prepare_command_with_shell_file() {
+        let cmd = vec!["echo".to_string(), "hello world".to_string()];
+        let mut shell = make_shell(None, None);
+        shell.file = Some(Path::new("/tmp/tend-shell.nix").to_path_buf());
+        let prepared = prepare_command(&cmd, Some(&shell));
+        assert_eq!(prepared.program, "nix-shell");
+        assert_eq!(
+            prepared.args,
+            vec!["/tmp/tend-shell.nix", "--run", "echo 'hello world'"]
         );
     }
 

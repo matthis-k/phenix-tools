@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::model::{NodeConfig, ResolvedNode, ResolvedTask};
+use crate::model::{ContextConfig, NodeConfig, ResolvedNode, ResolvedTask, ShellConfig};
 
 #[derive(Debug)]
 pub enum ConfigError {
@@ -37,6 +37,7 @@ pub fn resolve_node(
     config_path: &std::path::Path,
     node_path: &std::path::Path,
     config: NodeConfig,
+    inherited_shell: Option<ShellConfig>,
 ) -> ResolvedNode {
     let id = config
         .id
@@ -44,11 +45,13 @@ pub fn resolve_node(
         .unwrap_or_else(|| node_path.to_string_lossy().to_string());
     let description = config.description.unwrap_or_default();
     let tags = config.tags.unwrap_or_default();
-    let context = config.context.unwrap_or(crate::model::ContextConfig {
+    let mut context = config.context.unwrap_or(crate::model::ContextConfig {
         workdir: None,
         env: None,
         shell: None,
     });
+
+    apply_auto_shell(config_path, &mut context, inherited_shell);
 
     let tasks: Vec<ResolvedTask> = config
         .tasks
@@ -72,6 +75,38 @@ pub fn resolve_node(
         after: config.after.unwrap_or_default(),
         tasks,
     }
+}
+
+fn apply_auto_shell(
+    config_path: &std::path::Path,
+    context: &mut ContextConfig,
+    inherited_shell: Option<ShellConfig>,
+) {
+    if context
+        .shell
+        .as_ref()
+        .is_some_and(|shell| shell.auto == Some(false))
+    {
+        context.shell = None;
+        return;
+    }
+
+    if context.shell.is_some() {
+        return;
+    }
+
+    let local_shell = config_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("tend-shell.nix");
+    context.shell = if local_shell.exists() {
+        Some(ShellConfig {
+            file: Some(local_shell),
+            ..ShellConfig::default()
+        })
+    } else {
+        inherited_shell
+    };
 }
 
 pub fn default_mutates(phase: &crate::model::Phase) -> bool {

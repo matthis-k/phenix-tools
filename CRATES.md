@@ -32,9 +32,18 @@ The CLI and MCP crates are frontends only:
 
 | Tool   | Owns                                                                 |
 |--------|----------------------------------------------------------------------|
-| `tend` | distributed task files, recursive discovery, composable task tree    |
+| `tend` | distributed task files, recursive discovery, prerequisites, generated flake behavior, `tend-shell.nix` shell discovery |
 | `stitch` | workspace repo discovery, multi-repo status, changeset planning    |
 | `phenix` | reserved for future high-level Phenix workspace/OS commands        |
+
+Tend prerequisite safety is edge-scoped: generated-source tasks are not allowed
+globally in strict profiles, but a safe generate task may run when selected as
+an explicit prerequisite.
+
+Tend shell resolution is part of the core `tend` crate so CLI and MCP frontends
+consume the same resolved context. Sibling `tend-shell.nix` files are discovered
+next to `.tend.json` files and execute via `nix-shell`, while explicit flake
+shells keep the existing `nix develop` behavior.
 
 ## Legacy
 

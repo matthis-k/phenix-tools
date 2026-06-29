@@ -1,11 +1,16 @@
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+
 use globset::{GlobBuilder, GlobSetBuilder};
 
-use crate::config;
 use crate::model::*;
+use crate::{config, profiles};
 
 #[derive(Debug)]
 pub enum PlanError {
     MutatingRefused(String),
+    UnsafePrerequisite { task: String, prerequisite: String },
+    UnknownPrerequisite { task: String, prerequisite: String },
+    PrerequisiteCycle(String),
 }
 
 impl std::fmt::Display for PlanError {
@@ -14,6 +19,13 @@ impl std::fmt::Display for PlanError {
             Self::MutatingRefused(id) => {
                 write!(f, "mutating task '{id}' refused in non-mutating command")
             }
+            Self::UnsafePrerequisite { task, prerequisite } => {
+                write!(f, "task '{task}' requires unsafe prerequisite '{prerequisite}'")
+            }
+            Self::UnknownPrerequisite { task, prerequisite } => {
+                write!(f, "task '{task}' requires unknown task '{prerequisite}'")
+            }
+            Self::PrerequisiteCycle(id) => write!(f, "prerequisite cycle involving task '{id}'"),
         }
     }
 }
@@ -33,6 +45,7 @@ pub struct PlanItem {
     pub context: ContextConfig,
     pub reason: PlanReason,
     pub matched_files: Vec<String>,
+    pub prerequisite_for: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +63,7 @@ pub enum PlanReason {
     ExplicitSelection,
     NoWhenCondition,
     BeforeAfter,
+    Prerequisite,
 }
 
 impl std::fmt::Display for PlanReason {
@@ -61,6 +75,7 @@ impl std::fmt::Display for PlanReason {
             PlanReason::ExplicitSelection => write!(f, "explicitly selected"),
             PlanReason::NoWhenCondition => write!(f, "no when.changed condition"),
             PlanReason::BeforeAfter => write!(f, "before/after hook"),
+            PlanReason::Prerequisite => write!(f, "prerequisite task"),
         }
     }
 }
@@ -80,7 +95,25 @@ pub fn build_plan(nodes: &[ResolvedNode], req: &PlanRequest) -> Result<Plan, Pla
     };
     let changed_ref = changed_files.as_deref();
     let command_is_mutating = phase.is_mutating();
+    let mut roots = BTreeSet::new();
     let mut items = Vec::new();
+    let mut by_key: BTreeMap<String, (&ResolvedNode, &ResolvedTask)> = BTreeMap::new();
+    let mut by_node_task: BTreeMap<(String, String), String> = BTreeMap::new();
+
+    for node in nodes {
+        for task in &node.tasks {
+            let key = format!("{}.{}", node.id, task.config.id);
+            by_node_task.insert((node.id.clone(), task.config.id.clone()), key.clone());
+            by_node_task.insert(
+                (
+                    node.node_path.to_string_lossy().to_string(),
+                    task.config.id.clone(),
+                ),
+                key.clone(),
+            );
+            by_key.insert(key, (node, task));
+        }
+    }
 
     for node in nodes {
         if let Some(ref g) = req.group {
@@ -118,6 +151,7 @@ pub fn build_plan(nodes: &[ResolvedNode], req: &PlanRequest) -> Result<Plan, Pla
                 context: node.context.clone(),
                 reason: PlanReason::BeforeAfter,
                 matched_files: Vec::new(),
+                prerequisite_for: None,
             });
         }
 
@@ -156,85 +190,7 @@ pub fn build_plan(nodes: &[ResolvedNode], req: &PlanRequest) -> Result<Plan, Pla
                 return Err(PlanError::MutatingRefused(task.config.id.clone()));
             }
 
-            let task_chain_id = format!("{}.{}", node.id, task.config.id);
-
-            // Compute matched files for this task
-            let matched = compute_matched_files(task, changed_ref);
-
-            let has_when_condition = task
-                .config
-                .when
-                .as_ref()
-                .and_then(|w| w.changed.as_ref())
-                .map(|c| !c.paths.is_empty())
-                .unwrap_or(false);
-
-            let reason = if mode == RunMode::Force {
-                PlanReason::Force
-            } else if task.config.always.unwrap_or(false) {
-                PlanReason::Always
-            } else if !matched.is_empty() {
-                PlanReason::ChangedFile
-            } else if !has_when_condition {
-                PlanReason::NoWhenCondition
-            } else {
-                PlanReason::ExplicitSelection
-            };
-
-            let task_context = merge_context(&node.context, task.config.context.as_ref());
-
-            for step_cfg in task.config.before.iter().flatten() {
-                let step = Step::from(step_cfg);
-                items.push(PlanItem {
-                    node_path: node.node_path.clone(),
-                    config_path: node.config_path.clone(),
-                    task_id: format!("{}.before", task.config.id),
-                    chain_id: task_chain_id.clone(),
-                    description: step.description.clone(),
-                    phase,
-                    step,
-                    item_type: PlanItemType::TaskBefore,
-                    context: task_context.clone(),
-                    reason: PlanReason::BeforeAfter,
-                    matched_files: Vec::new(),
-                });
-            }
-
-            let task_step_kind = task_step_kind_from_config(&task.config);
-            items.push(PlanItem {
-                node_path: node.node_path.clone(),
-                config_path: node.config_path.clone(),
-                task_id: task.config.id.clone(),
-                chain_id: task_chain_id.clone(),
-                description: task.config.description.clone().unwrap_or_default(),
-                phase,
-                step: Step {
-                    kind: task_step_kind,
-                    always: task.config.always.unwrap_or(false),
-                    description: task.config.description.clone().unwrap_or_default(),
-                },
-                item_type: PlanItemType::TaskAction,
-                context: task_context.clone(),
-                reason,
-                matched_files: matched,
-            });
-
-            for step_cfg in task.config.after.iter().flatten() {
-                let step = Step::from(step_cfg);
-                items.push(PlanItem {
-                    node_path: node.node_path.clone(),
-                    config_path: node.config_path.clone(),
-                    task_id: format!("{}.after", task.config.id),
-                    chain_id: task_chain_id.clone(),
-                    description: step.description.clone(),
-                    phase,
-                    step,
-                    item_type: PlanItemType::TaskAfter,
-                    context: task_context.clone(),
-                    reason: PlanReason::BeforeAfter,
-                    matched_files: Vec::new(),
-                });
-            }
+            roots.insert(format!("{}.{}", node.id, task.config.id));
         }
 
         for step_cfg in &node.after {
@@ -261,11 +217,133 @@ pub fn build_plan(nodes: &[ResolvedNode], req: &PlanRequest) -> Result<Plan, Pla
                 context: node.context.clone(),
                 reason: PlanReason::BeforeAfter,
                 matched_files: Vec::new(),
+                prerequisite_for: None,
             });
         }
     }
 
+    let mut ordered = Vec::new();
+    let mut visiting = HashSet::new();
+    let mut visited = HashSet::new();
+    for root in roots {
+        visit_task(
+            &root,
+            None,
+            command_is_mutating,
+            &by_key,
+            &by_node_task,
+            &mut visiting,
+            &mut visited,
+            &mut ordered,
+        )?;
+    }
+
+    for (key, prerequisite_for) in ordered {
+        let (node, task) = by_key[&key];
+        let reason = if prerequisite_for.is_some() {
+            PlanReason::Prerequisite
+        } else {
+            plan_reason(task, mode, changed_ref)
+        };
+        push_task_items(&mut items, node, task, phase, reason, prerequisite_for, changed_ref);
+    }
+
     Ok(Plan { items })
+}
+
+fn visit_task<'a>(
+    key: &str,
+    prerequisite_for: Option<String>,
+    command_is_mutating: bool,
+    by_key: &BTreeMap<String, (&'a ResolvedNode, &'a ResolvedTask)>,
+    by_node_task: &BTreeMap<(String, String), String>,
+    visiting: &mut HashSet<String>,
+    visited: &mut HashSet<String>,
+    ordered: &mut Vec<(String, Option<String>)>,
+) -> Result<(), PlanError> {
+    if visited.contains(key) {
+        return Ok(());
+    }
+    if !visiting.insert(key.to_string()) {
+        return Err(PlanError::PrerequisiteCycle(key.to_string()));
+    }
+    let (node, task) = by_key.get(key).ok_or_else(|| PlanError::UnknownPrerequisite {
+        task: prerequisite_for.clone().unwrap_or_else(|| key.to_string()),
+        prerequisite: key.to_string(),
+    })?;
+    for req in task.config.requires.iter().flatten() {
+        let req_key = resolve_ref(node, req, by_node_task).ok_or_else(|| {
+            PlanError::UnknownPrerequisite {
+                task: key.to_string(),
+                prerequisite: req.task().to_string(),
+            }
+        })?;
+        let (_, prerequisite) = by_key.get(&req_key).ok_or_else(|| {
+            PlanError::UnknownPrerequisite {
+                task: key.to_string(),
+                prerequisite: req.task().to_string(),
+            }
+        })?;
+        if !prerequisite_edge_allowed(command_is_mutating, prerequisite) {
+            return Err(PlanError::UnsafePrerequisite {
+                task: key.to_string(),
+                prerequisite: req_key,
+            });
+        }
+        visit_task(
+            &req_key,
+            Some(key.to_string()),
+            command_is_mutating,
+            by_key,
+            by_node_task,
+            visiting,
+            visited,
+            ordered,
+        )?;
+    }
+    visiting.remove(key);
+    visited.insert(key.to_string());
+    ordered.push((key.to_string(), prerequisite_for));
+    Ok(())
+}
+
+fn prerequisite_edge_allowed(command_is_mutating: bool, task: &ResolvedTask) -> bool {
+    let is_mutating = task
+        .config
+        .mutates
+        .unwrap_or_else(|| config::default_mutates(&task.config.phase));
+
+    command_is_mutating || !is_mutating || profiles::is_safe_generated_source_prerequisite(task)
+}
+
+fn resolve_ref(
+    node: &ResolvedNode,
+    req: &TaskRef,
+    by_node_task: &BTreeMap<(String, String), String>,
+) -> Option<String> {
+    let node_id = req.node().unwrap_or(&node.id);
+    by_node_task.get(&(node_id.to_string(), req.task().to_string())).cloned()
+}
+
+fn plan_reason(task: &ResolvedTask, mode: RunMode, changed_ref: Option<&[String]>) -> PlanReason {
+    let matched = compute_matched_files(task, changed_ref);
+    let has_when_condition = task.config.when.as_ref().and_then(|w| w.changed.as_ref()).map(|c| !c.paths.is_empty()).unwrap_or(false);
+    if mode == RunMode::Force { PlanReason::Force } else if task.config.always.unwrap_or(false) { PlanReason::Always } else if !matched.is_empty() { PlanReason::ChangedFile } else if !has_when_condition { PlanReason::NoWhenCondition } else { PlanReason::ExplicitSelection }
+}
+
+fn push_task_items(items: &mut Vec<PlanItem>, node: &ResolvedNode, task: &ResolvedTask, phase: Phase, reason: PlanReason, prerequisite_for: Option<String>, changed_ref: Option<&[String]>) {
+    let task_chain_id = format!("{}.{}", node.id, task.config.id);
+    let task_context = merge_context(&node.context, task.config.context.as_ref());
+    for step_cfg in task.config.before.iter().flatten() {
+        let step = Step::from(step_cfg);
+        items.push(PlanItem { node_path: node.node_path.clone(), config_path: node.config_path.clone(), task_id: format!("{}.before", task.config.id), chain_id: task_chain_id.clone(), description: step.description.clone(), phase, step, item_type: PlanItemType::TaskBefore, context: task_context.clone(), reason: PlanReason::BeforeAfter, matched_files: Vec::new(), prerequisite_for: prerequisite_for.clone() });
+    }
+    let matched = compute_matched_files(task, changed_ref);
+    items.push(PlanItem { node_path: node.node_path.clone(), config_path: node.config_path.clone(), task_id: task.config.id.clone(), chain_id: task_chain_id.clone(), description: task.config.description.clone().unwrap_or_default(), phase: task.config.phase, step: Step { kind: task_step_kind_from_config(&task.config), always: task.config.always.unwrap_or(false), description: task.config.description.clone().unwrap_or_default() }, item_type: PlanItemType::TaskAction, context: task_context.clone(), reason, matched_files: matched, prerequisite_for: prerequisite_for.clone() });
+    for step_cfg in task.config.after.iter().flatten() {
+        let step = Step::from(step_cfg);
+        items.push(PlanItem { node_path: node.node_path.clone(), config_path: node.config_path.clone(), task_id: format!("{}.after", task.config.id), chain_id: task_chain_id.clone(), description: step.description.clone(), phase, step, item_type: PlanItemType::TaskAfter, context: task_context.clone(), reason: PlanReason::BeforeAfter, matched_files: Vec::new(), prerequisite_for: prerequisite_for.clone() });
+    }
 }
 
 /// Check whether a task matches the requested profile.
@@ -484,11 +562,37 @@ mod tests {
                 sandbox_safe: None,
                 when: None,
                 always: None,
+                requires: None,
                 before: None,
                 after: None,
             },
             parent_node_path: Path::new(".").to_path_buf(),
         }
+    }
+
+    fn make_command_task_requiring(id: &str, requires: Vec<TaskRef>) -> ResolvedTask {
+        let mut task = make_command_task(
+            id,
+            Phase::Verify,
+            false,
+            vec!["echo".to_string(), id.to_string()],
+        );
+        task.config.requires = Some(requires);
+        task
+    }
+
+    fn make_safe_generated_task(id: &str) -> ResolvedTask {
+        let mut task = make_command_task(
+            id,
+            Phase::Generate,
+            true,
+            vec!["tend".to_string(), "flake".to_string(), "write".to_string()],
+        );
+        task.config.tags = Some(vec!["generated-source".to_string()]);
+        task.config.sandbox_safe = Some(true);
+        task.config.interactive = Some(false);
+        task.config.network = Some(false);
+        task
     }
 
     fn make_command_task_with_context(
@@ -516,6 +620,7 @@ mod tests {
                 sandbox_safe: None,
                 when: None,
                 always: None,
+                requires: None,
                 before: None,
                 after: None,
             },
@@ -576,6 +681,93 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[test]
+    fn test_prerequisite_runs_before_dependent() {
+        let node = make_node(
+            "root",
+            vec![
+                make_command_task_requiring("dependent", vec![TaskRef::Id("setup".to_string())]),
+                make_command_task("setup", Phase::Verify, false, vec!["echo".to_string()]),
+            ],
+        );
+        let plan = build_plan(&[node], &req(Phase::Verify, RunMode::Full)).unwrap();
+        let actions: Vec<_> = plan
+            .items
+            .iter()
+            .filter(|item| item.item_type == PlanItemType::TaskAction)
+            .map(|item| item.task_id.as_str())
+            .collect();
+        assert_eq!(actions, vec!["setup", "dependent"]);
+        assert_eq!(plan.items[0].reason, PlanReason::Prerequisite);
+    }
+
+    #[test]
+    fn test_safe_generated_prerequisite_allowed_in_verify() {
+        let node = make_node(
+            "root",
+            vec![
+                make_command_task_requiring("dependent", vec![TaskRef::Id("generate".to_string())]),
+                make_safe_generated_task("generate"),
+            ],
+        );
+        let plan = build_plan(&[node], &req(Phase::Verify, RunMode::Full)).unwrap();
+        let actions: Vec<_> = plan
+            .items
+            .iter()
+            .filter(|item| item.item_type == PlanItemType::TaskAction)
+            .map(|item| item.task_id.as_str())
+            .collect();
+        assert_eq!(actions, vec!["generate", "dependent"]);
+    }
+
+    #[test]
+    fn test_unsafe_mutating_prerequisite_refused_in_verify() {
+        let node = make_node(
+            "root",
+            vec![
+                make_command_task_requiring("dependent", vec![TaskRef::Id("setup".to_string())]),
+                make_command_task("setup", Phase::Generate, true, vec!["touch".to_string(), "x".to_string()]),
+            ],
+        );
+        assert!(matches!(
+            build_plan(&[node], &req(Phase::Verify, RunMode::Full)),
+            Err(PlanError::UnsafePrerequisite { .. })
+        ));
+    }
+
+    #[test]
+    fn test_unknown_prerequisite_errors() {
+        let node = make_node(
+            "root",
+            vec![make_command_task_requiring(
+                "dependent",
+                vec![TaskRef::Object {
+                    node: None,
+                    task: "missing".to_string(),
+                }],
+            )],
+        );
+        assert!(matches!(
+            build_plan(&[node], &req(Phase::Verify, RunMode::Full)),
+            Err(PlanError::UnknownPrerequisite { .. })
+        ));
+    }
+
+    #[test]
+    fn test_prerequisite_cycle_errors() {
+        let node = make_node(
+            "root",
+            vec![
+                make_command_task_requiring("a", vec![TaskRef::Id("b".to_string())]),
+                make_command_task_requiring("b", vec![TaskRef::Id("a".to_string())]),
+            ],
+        );
+        assert!(matches!(
+            build_plan(&[node], &req(Phase::Verify, RunMode::Full)),
+            Err(PlanError::PrerequisiteCycle(_))
+        ));
+    }
+
     fn make_task_with_profiles(id: &str, profiles: Vec<&str>) -> ResolvedTask {
         ResolvedTask {
             config: TaskConfig {
@@ -595,6 +787,7 @@ mod tests {
                 sandbox_safe: None,
                 when: None,
                 always: None,
+                requires: None,
                 before: None,
                 after: None,
             },
@@ -626,6 +819,7 @@ mod tests {
                 sandbox_safe: None,
                 when: None,
                 always: None,
+                requires: None,
                 before: None,
                 after: None,
             },
@@ -841,9 +1035,11 @@ mod tests {
             shell: Some(ShellConfig {
                 flake: Some(".".to_string()),
                 name: Some("default".to_string()),
+                file: None,
                 impure: None,
                 accept_flake_config: None,
                 extra_args: None,
+                auto: None,
             }),
         };
         let task = ContextConfig {
@@ -852,9 +1048,11 @@ mod tests {
             shell: Some(ShellConfig {
                 flake: Some(".".to_string()),
                 name: Some("test".to_string()),
+                file: None,
                 impure: None,
                 accept_flake_config: None,
                 extra_args: None,
+                auto: None,
             }),
         };
         let merged = merge_context(&node, Some(&task));
@@ -903,9 +1101,11 @@ mod tests {
             shell: Some(ShellConfig {
                 flake: Some(".".to_string()),
                 name: Some("default".to_string()),
+                file: None,
                 impure: None,
                 accept_flake_config: None,
                 extra_args: None,
+                auto: None,
             }),
         };
         let merged = merge_context(&node, None);
@@ -923,9 +1123,11 @@ mod tests {
             shell: Some(ShellConfig {
                 flake: Some(".".to_string()),
                 name: Some("test".to_string()),
+                file: None,
                 impure: None,
                 accept_flake_config: None,
                 extra_args: None,
+                auto: None,
             }),
         };
         let task = make_command_task_with_context(

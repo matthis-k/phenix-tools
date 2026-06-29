@@ -341,6 +341,11 @@ pub fn run_affected_dag(
                 global_failed = true;
                 continue;
             }
+            Err(e) => {
+                eprintln!("  PLAN ERROR: {e}");
+                global_failed = true;
+                continue;
+            }
         };
 
         if plan.items.is_empty() {

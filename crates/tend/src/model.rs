@@ -142,9 +142,11 @@ impl WorkdirPolicy {
 pub struct ShellConfig {
     pub flake: Option<String>,
     pub name: Option<String>,
+    pub file: Option<PathBuf>,
     pub impure: Option<bool>,
     pub accept_flake_config: Option<bool>,
     pub extra_args: Option<Vec<String>>,
+    pub auto: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -180,8 +182,32 @@ pub struct TaskConfig {
     pub sandbox_safe: Option<bool>,
     pub when: Option<WhenConfig>,
     pub always: Option<bool>,
+    pub requires: Option<Vec<TaskRef>>,
     pub before: Option<Vec<StepConfig>>,
     pub after: Option<Vec<StepConfig>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TaskRef {
+    Id(String),
+    Object { node: Option<String>, task: String },
+}
+
+impl TaskRef {
+    pub fn task(&self) -> &str {
+        match self {
+            Self::Id(task) => task,
+            Self::Object { task, .. } => task,
+        }
+    }
+
+    pub fn node(&self) -> Option<&str> {
+        match self {
+            Self::Id(_) => None,
+            Self::Object { node, .. } => node.as_deref(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

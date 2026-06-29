@@ -126,6 +126,19 @@ fn command_string(task: &ResolvedTask) -> String {
     }
 }
 
+pub fn is_safe_generated_source_prerequisite(task: &ResolvedTask) -> bool {
+    task.config.phase == crate::model::Phase::Generate
+        && task.config.mutates.unwrap_or(true)
+        && task.config.sandbox_safe.unwrap_or(false)
+        && !task.config.interactive.unwrap_or(false)
+        && !task.config.network.unwrap_or(false)
+        && task
+            .config
+            .tags
+            .as_ref()
+            .is_some_and(|tags| tags.iter().any(|tag| tag == "generated-source"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,11 +171,27 @@ mod tests {
                 sandbox_safe: Some(true),
                 when: None,
                 always: None,
+                requires: None,
                 before: None,
                 after: None,
             },
             parent_node_path: Path::new(".").to_path_buf(),
         }
+    }
+
+    fn make_safe_generated_task(id: &str) -> ResolvedTask {
+        let mut task = make_verify_task(
+            id,
+            vec!["nix-check"],
+            vec!["generated-source"],
+            true,
+            false,
+            vec!["tend", "flake", "write"],
+        );
+        task.config.phase = Phase::Generate;
+        task.config.sandbox_safe = Some(true);
+        task.config.network = Some(false);
+        task
     }
 
     fn make_node(id: &str, tasks: Vec<ResolvedTask>) -> ResolvedNode {
@@ -199,6 +228,16 @@ mod tests {
         assert!(result.is_err());
         let msgs: Vec<String> = result.unwrap_err().iter().map(|v| v.to_string()).collect();
         assert!(msgs.iter().any(|m| m.contains("test")));
+    }
+
+    #[test]
+    fn test_generated_source_tag_does_not_globally_allow_strict_profile() {
+        let task = make_safe_generated_task("generate-flake");
+        let node = make_node("root", vec![task]);
+        let result = validate_profiles(&[node]);
+        assert!(result.is_err());
+        let msgs: Vec<String> = result.unwrap_err().iter().map(|v| v.to_string()).collect();
+        assert!(msgs.iter().any(|m| m.contains("mutating tasks")));
     }
 
     #[test]

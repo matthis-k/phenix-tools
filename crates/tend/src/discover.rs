@@ -5,7 +5,7 @@ use walkdir::WalkDir;
 
 use crate::config;
 use crate::config::ConfigError;
-use crate::model::{NodeConfig, ResolvedNode, TendConfig};
+use crate::model::{NodeConfig, ResolvedNode, ShellConfig, TendConfig};
 
 const IGNORED_DIRS: &[&str] = &[
     ".git",
@@ -161,9 +161,30 @@ pub fn discover_configs(
 }
 
 pub fn resolve_nodes(_root: &Path, discovered: Vec<DiscoveredNode>) -> Vec<ResolvedNode> {
+    let inherited_shell = discovered
+        .iter()
+        .find(|d| d.node_path == Path::new("."))
+        .and_then(|d| {
+            let path = d
+                .config_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("tend-shell.nix");
+            path.exists().then(|| ShellConfig {
+                file: Some(path),
+                ..ShellConfig::default()
+            })
+        });
     discovered
         .into_iter()
-        .map(|d| config::resolve_node(&d.config_path, &d.node_path, d.node_config))
+        .map(|d| {
+            config::resolve_node(
+                &d.config_path,
+                &d.node_path,
+                d.node_config,
+                inherited_shell.clone(),
+            )
+        })
         .collect()
 }
 
@@ -213,5 +234,32 @@ mod tests {
         assert!(!paths.contains(&PathBuf::from("target")));
         assert!(!paths.contains(&PathBuf::from(".git")));
         assert_eq!(paths.len(), 3);
+    }
+
+    #[test]
+    fn test_resolve_nodes_shell_precedence_and_inheritance() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        fs::create_dir_all(root.join("local")).unwrap();
+        fs::create_dir_all(root.join("inherited")).unwrap();
+        fs::write(root.join(".tend.json"), r#"{"version":1,"node":{"id":"root","tasks":[]}}"#).unwrap();
+        fs::write(root.join("tend-shell.nix"), "{}").unwrap();
+        fs::write(root.join("local/.tend.json"), r#"{"version":1,"node":{"id":"local","tasks":[]}}"#).unwrap();
+        fs::write(root.join("local/tend-shell.nix"), "{}").unwrap();
+        fs::write(root.join("inherited/.tend.json"), r#"{"version":1,"node":{"id":"inherited","tasks":[]}}"#).unwrap();
+
+        let nodes = resolve_nodes(root, discover_configs(root, None).unwrap());
+        let local = nodes.iter().find(|n| n.id == "local").unwrap();
+        let inherited = nodes.iter().find(|n| n.id == "inherited").unwrap();
+
+        assert_eq!(
+            local.context.shell.as_ref().unwrap().file.as_ref().unwrap(),
+            &root.join("local/tend-shell.nix")
+        );
+        assert_eq!(
+            inherited.context.shell.as_ref().unwrap().file.as_ref().unwrap(),
+            &root.join("tend-shell.nix")
+        );
     }
 }

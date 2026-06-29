@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::checks;
@@ -20,6 +20,7 @@ pub struct ExecutionResult {
 pub fn execute_plan(items: &[PlanItem], _root: &Path) -> Vec<ExecutionResult> {
     let mut results = Vec::new();
     let mut failed_chains: HashSet<String> = HashSet::new();
+    let mut prerequisite_failures: HashMap<String, String> = HashMap::new();
 
     for item in items {
         if failed_chains.contains(&item.chain_id) && !item.step.always {
@@ -29,7 +30,10 @@ pub fn execute_plan(items: &[PlanItem], _root: &Path) -> Vec<ExecutionResult> {
                 kind: item.step.kind.description().to_string(),
                 phase: item.phase,
                 outcome: CheckOutcome::Skipped {
-                    reason: "skipped due to earlier failure in chain".to_string(),
+                    reason: prerequisite_failures
+                        .get(&item.chain_id)
+                        .cloned()
+                        .unwrap_or_else(|| "skipped due to earlier failure in chain".to_string()),
                 },
                 stdout: String::new(),
                 stderr: String::new(),
@@ -58,6 +62,13 @@ pub fn execute_plan(items: &[PlanItem], _root: &Path) -> Vec<ExecutionResult> {
 
         if check_result.outcome.is_failure() {
             failed_chains.insert(item.chain_id.clone());
+            if let Some(required_by) = &item.prerequisite_for {
+                failed_chains.insert(required_by.clone());
+                prerequisite_failures.insert(
+                    required_by.clone(),
+                    format!("skipped because prerequisite '{}' failed", item.chain_id),
+                );
+            }
         }
 
         results.push(ExecutionResult {

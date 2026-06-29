@@ -115,6 +115,21 @@ enum Commands {
         #[command(subcommand)]
         command: PreflightCommand,
     },
+    /// Manage generated flake files
+    Flake {
+        #[command(subcommand)]
+        command: FlakeCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum FlakeCommand {
+    /// Write missing generated flake files
+    Write,
+    /// Check generated flake files without writing
+    Check,
+    /// Show generated flake file status
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -231,6 +246,7 @@ fn main() {
             }
         }
         Commands::Preflight { command } => cmd_preflight(&root, configs.as_deref(), command),
+        Commands::Flake { command } => cmd_flake(&root, command),
     };
 
     match exit_code {
@@ -240,6 +256,23 @@ fn main() {
             std::process::exit(2);
         }
     }
+}
+
+fn cmd_flake(root: &PathBuf, command: FlakeCommand) -> Result<i32, String> {
+    let status = match command {
+        FlakeCommand::Write => tend::flake::write(root)?,
+        FlakeCommand::Check => tend::flake::check(root)?,
+        FlakeCommand::Status => tend::flake::status(root),
+    };
+    println!("flake.nix: {}", if status.flake_nix_exists { "present" } else { "missing" });
+    println!("flake.lock: {}", if status.flake_lock_exists { "present" } else { "missing" });
+    println!("flake.nix.in: {}", if status.source_exists { "present" } else { "missing" });
+    match status.up_to_date {
+        Some(true) => println!("generated: up-to-date"),
+        Some(false) => println!("generated: stale"),
+        None => println!("generated: unmanaged"),
+    }
+    Ok(0)
 }
 
 fn get_changed_files(root: &std::path::Path) -> Result<Vec<String>, String> {
@@ -342,11 +375,7 @@ fn cmd_check(
         locked,
     };
 
-    let plan = planner::build_plan(&nodes, &req).map_err(|e| match e {
-        planner::PlanError::MutatingRefused(id) => {
-            format!("mutating task '{id}' refused in non-mutating command")
-        }
-    })?;
+    let plan = planner::build_plan(&nodes, &req).map_err(|e| format!("{e}"))?;
 
     if plan.items.is_empty() {
         println!("No tasks to run for profile '{profile}'.");
@@ -715,11 +744,7 @@ fn cmd_run(
         locked: false,
     };
 
-    let plan = planner::build_plan(&nodes, &req).map_err(|e| match e {
-        planner::PlanError::MutatingRefused(id) => {
-            format!("mutating task '{id}' refused in non-mutating command")
-        }
-    })?;
+    let plan = planner::build_plan(&nodes, &req).map_err(|e| format!("{e}"))?;
 
     if plan.items.is_empty() {
         println!("No tasks to run.");

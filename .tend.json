@@ -18,6 +18,7 @@
         "command": ["cargo", "fmt", "--all", "--check"],
         "profiles": ["git-hook", "pre-push", "manual", "nix-check"],
         "tags": ["format", "rust"],
+        "requires": ["generate-flake"],
         "sandbox_safe": true,
         "mutates": false,
         "always": true,
@@ -141,6 +142,24 @@
         "mutates": false,
         "interactive": false,
         "always": true
+      },
+      {
+        "id": "generate-flake",
+        "description": "Write generated flake files when missing",
+        "phase": "generate",
+        "kind": "command",
+        "command": ["tend", "flake", "write"],
+        "profiles": ["generate", "manual"],
+        "tags": ["generated-source", "nix"],
+        "sandbox_safe": true,
+        "mutates": true,
+        "interactive": false,
+        "network": false,
+        "when": {
+          "changed": {
+            "paths": [".tend.json"]
+          }
+        }
       },
       {
         "id": "rustfmt-fix",
