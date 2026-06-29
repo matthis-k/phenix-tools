@@ -28,6 +28,7 @@ fn main() {
         audit: AuditSink::new(Some(audit_dir)),
         safety: SafetyPolicy {
             allow_commit: true,
+            allow_network: true,
             ..SafetyPolicy::default()
         },
         server_name: "stitch-mcp".to_string(),
