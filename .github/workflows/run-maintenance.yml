@@ -26,6 +26,7 @@ jobs:
             sleep 30
           done
           cat > /tmp/patch-devenv.py <<'PY'
+          import re
           from pathlib import Path
           flake = Path("flake.nix")
           text = flake.read_text()
@@ -43,8 +44,12 @@ jobs:
               flake.write_text(text[:line_end] + addition + text[line_end:])
           for name in ["devenv.nix", "caretaker.nix", "modules/caretaker.nix", ".github/workflows/ci.yml"]:
               path = Path(name)
-              if path.exists():
-                  path.write_text(path.read_text().replace("nix flake check ", "nix flake check --no-pure-eval "))
+              if not path.exists():
+                  continue
+              value = path.read_text().replace("nix flake check ", "nix flake check --no-pure-eval ")
+              if name == "devenv.nix":
+                  value = re.sub(r'\n\s+presentable = \{.*?\n\s+\};', '', value, flags=re.S)
+              path.write_text(value)
           PY
           awk '/^        run: \|$/{capture=1; buf=""; next} capture {line=$0; sub(/^          /,"",line); buf=buf line ORS} END{printf "%s",buf}' .github/workflows/finalize-tools-scope.yml > /tmp/migrate.sh
           sed -i 's/nix flake check /nix flake check --no-pure-eval /g' /tmp/migrate.sh
@@ -56,7 +61,7 @@ jobs:
           if (( status != 0 )); then
             git reset --hard HEAD
             git clean -fdx
-            tail -n 600 /tmp/maintenance.log > .maintenance-failure.log
+            tail -n 650 /tmp/maintenance.log > .maintenance-failure.log
             git config user.name github-actions[bot]
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
             git add .maintenance-failure.log
