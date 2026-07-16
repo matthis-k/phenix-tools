@@ -16,15 +16,32 @@ jobs:
             accept-flake-config = true
       - name: Execute queued maintenance script
         run: |
-          set -euo pipefail
-          python3 -m pip install --quiet pyyaml
-          python3 - <<'PY'
-          import subprocess, yaml
-          data = yaml.safe_load(open('.github/workflows/finalize-tools-scope.yml'))
-          for step in data['jobs']['migrate']['steps']:
-              if step.get('run'):
-                  subprocess.run(step['run'], shell=True, executable='/bin/bash', check=True)
-          PY
+          set -uo pipefail
+          rm -f .maintenance-failure.log
+          for attempt in $(seq 1 90); do
+            flake="$(curl -fsSL https://raw.githubusercontent.com/matthis-k/phenix-stitch/main/flake.nix || true)"
+            readme="$(curl -fsSL https://raw.githubusercontent.com/matthis-k/phenix-stitch/main/README.md || true)"
+            if [[ "$flake" == *devenv* && "$flake" != *phenix-tend* && "$readme" == *"ordered execution"* ]]; then break; fi
+            if (( attempt == 90 )); then echo "scoped Stitch did not converge" | tee .maintenance-failure.log; exit 1; fi
+            sleep 30
+          done
+          awk '/^        run: \|$/{capture=1; buf=""; next} capture {line=$0; sub(/^          /,"",line); buf=buf line ORS} END{printf "%s",buf}' .github/workflows/finalize-tools-scope.yml > /tmp/migrate.sh
+          sed -i '/^nix flake update$/i git add -A' /tmp/migrate.sh
+          set +e
+          bash /tmp/migrate.sh 2>&1 | tee /tmp/maintenance.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if (( status != 0 )); then
+            git reset --hard HEAD
+            git clean -fdx
+            tail -n 400 /tmp/maintenance.log > .maintenance-failure.log
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add .maintenance-failure.log
+            git commit -m "ci: capture tools migration failure"
+            git push origin main
+            exit "$status"
+          fi
       - name: Remove maintenance trigger
         run: |
           set -euo pipefail
