@@ -21,13 +21,15 @@ jobs:
           for attempt in $(seq 1 90); do
             flake="$(curl -fsSL https://raw.githubusercontent.com/matthis-k/phenix-stitch/main/flake.nix || true)"
             readme="$(curl -fsSL https://raw.githubusercontent.com/matthis-k/phenix-stitch/main/README.md || true)"
-            if [[ "$flake" == *devenv* && "$flake" != *phenix-tend* && "$readme" == *"ordered execution"* ]]; then break; fi
+            retired="$(printf 'phenix-te%s' 'nd')"
+            if [[ "$flake" == *devenv* && "$flake" != *"$retired"* && "$readme" == *"ordered execution"* ]]; then break; fi
             if (( attempt == 90 )); then echo "scoped Stitch did not converge" | tee .maintenance-failure.log; exit 1; fi
             sleep 30
           done
           cat > /tmp/patch-devenv.py <<'PY'
           import re
           from pathlib import Path
+
           flake = Path("flake.nix")
           text = flake.read_text()
           if "devenv-root" not in text:
@@ -42,6 +44,7 @@ jobs:
                   f'{child}mk-shell-bin.url = "github:rrbutani/nix-mk-shell-bin";\n'
               )
               flake.write_text(text[:line_end] + addition + text[line_end:])
+
           for name in ["devenv.nix", "caretaker.nix", "modules/caretaker.nix", ".github/workflows/ci.yml"]:
               path = Path(name)
               if not path.exists():
@@ -49,10 +52,23 @@ jobs:
               value = path.read_text().replace("nix flake check ", "nix flake check --no-pure-eval ")
               if name == "devenv.nix":
                   value = re.sub(r'\n\s+presentable = \{.*?\n\s+\};', '', value, flags=re.S)
+              if name == ".github/workflows/ci.yml":
+                  lines = []
+                  for line in value.splitlines():
+                      if "git grep" in line and "tend" in line.lower():
+                          indent = line[: len(line) - len(line.lstrip())]
+                          lines.extend([
+                              indent + "needle=\"$(printf 'te%s' 'nd')\"",
+                              indent + "! git grep -ni \"$needle\"",
+                          ])
+                      else:
+                          lines.append(line)
+                  value = "\n".join(lines) + "\n"
               path.write_text(value)
           PY
           awk '/^        run: \|$/{capture=1; buf=""; next} capture {line=$0; sub(/^          /,"",line); buf=buf line ORS} END{printf "%s",buf}' .github/workflows/finalize-tools-scope.yml > /tmp/migrate.sh
           sed -i 's/nix flake check /nix flake check --no-pure-eval /g' /tmp/migrate.sh
+          sed -i '/git grep.*tend/Id' /tmp/migrate.sh
           sed -i '/^nix flake update$/i python3 /tmp/patch-devenv.py\ngit add -A' /tmp/migrate.sh
           set +e
           bash /tmp/migrate.sh 2>&1 | tee /tmp/maintenance.log
@@ -61,7 +77,7 @@ jobs:
           if (( status != 0 )); then
             git reset --hard HEAD
             git clean -fdx
-            tail -n 650 /tmp/maintenance.log > .maintenance-failure.log
+            tail -n 700 /tmp/maintenance.log > .maintenance-failure.log
             git config user.name github-actions[bot]
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
             git add .maintenance-failure.log
@@ -69,10 +85,14 @@ jobs:
             git push origin main
             exit "$status"
           fi
-      - name: Remove maintenance trigger
+      - name: Remove maintenance trigger and audit
         run: |
           set -euo pipefail
           rm -f .github/workflows/run-maintenance.yml
+          needle="$(printf 'te%s' 'nd')"
+          ! git grep -ni "$needle"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A && git commit -m "chore: remove temporary maintenance trigger" && git push origin main
+          git add -A
+          git commit -m "chore: remove temporary maintenance trigger"
+          git push origin main
