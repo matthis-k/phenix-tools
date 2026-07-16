@@ -1,0 +1,209 @@
+name: Finalize tools scope
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/finalize-tools-scope.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+      - name: Wait for the scoped Stitch source
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 90); do
+            flake="$(curl -fsSL https://raw.githubusercontent.com/matthis-k/phenix-stitch/main/flake.nix || true)"
+            readme="$(curl -fsSL https://raw.githubusercontent.com/matthis-k/phenix-stitch/main/README.md || true)"
+            if [[ "$flake" == *devenv* && "$flake" != *phenix-tend* && "$readme" == *"ordered execution"* ]]; then
+              exit 0
+            fi
+            sleep 30
+          done
+          exit 1
+      - name: Make phenix-tools a thin aggregator
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf crates Cargo.toml Cargo.lock .tend.json
+          rm -rf modules
+          mkdir -p modules
+
+          cat > flake.nix <<'EOF'
+          {
+            description = "Thin aggregation of Phenix command-line tools";
+            inputs = {
+              flake-parts.url = "github:hercules-ci/flake-parts";
+              phenix-pins.url = "github:matthis-k/phenix-pins";
+              nixpkgs.follows = "phenix-pins/nixpkgs";
+              phenix-stitch = {
+                url = "github:matthis-k/phenix-stitch";
+                inputs = {
+                  phenix-pins.follows = "phenix-pins";
+                  flake-parts.follows = "flake-parts";
+                };
+              };
+              phenix-opencode.url = "github:matthis-k/phenix-opencode";
+              devenv = {
+                url = "github:cachix/devenv";
+                inputs.nixpkgs.follows = "nixpkgs";
+              };
+              treefmt-nix = {
+                url = "github:numtide/treefmt-nix";
+                inputs.nixpkgs.follows = "nixpkgs";
+              };
+              git-hooks = {
+                url = "github:cachix/git-hooks.nix";
+                inputs.nixpkgs.follows = "nixpkgs";
+              };
+            };
+            outputs = inputs@{ flake-parts, ... }:
+              flake-parts.lib.mkFlake { inherit inputs; } {
+                systems = [ "x86_64-linux" "aarch64-linux" ];
+                imports = [ inputs.devenv.flakeModule ./modules/standalone.nix ];
+                flake.flakeModules.default = import ./modules/flake-module.nix;
+              };
+          }
+          EOF
+
+          cat > modules/standalone.nix <<'EOF'
+          { inputs, ... }: {
+            perSystem = { pkgs, system, ... }: {
+              packages = {
+                stitch = inputs.phenix-stitch.packages.${system}.stitch;
+                stitch-mcp = inputs.phenix-stitch.packages.${system}.stitch-mcp;
+                opencode = inputs.phenix-opencode.packages.${system}.default;
+                default = inputs.phenix-stitch.packages.${system}.stitch;
+              };
+              apps = {
+                stitch = inputs.phenix-stitch.apps.${system}.stitch;
+                stitch-mcp = inputs.phenix-stitch.apps.${system}.stitch-mcp;
+                opencode = {
+                  type = "app";
+                  program = "${inputs.phenix-opencode.packages.${system}.default}/bin/opencode";
+                };
+                default = inputs.phenix-stitch.apps.${system}.stitch;
+              };
+              devenv.shells.default = {
+                imports = [ ../devenv.nix ];
+                packages = [
+                  inputs.phenix-stitch.packages.${system}.stitch
+                  inputs.phenix-stitch.packages.${system}.stitch-mcp
+                  pkgs.nix pkgs.nixfmt pkgs.statix pkgs.deadnix
+                ];
+              };
+            };
+          }
+          EOF
+
+          cat > modules/flake-module.nix <<'EOF'
+          { inputs, ... }: {
+            perSystem = { system, ... }: {
+              phenixWrapped.stitch = inputs.phenix-tools.packages.${system}.stitch;
+            };
+          }
+          EOF
+
+          cat > modules/caretaker.nix <<'EOF'
+          { ... }: {
+            tasks = {
+              "check:format" = { exec = "treefmt --fail-on-change"; before = [ "devenv:enterTest" ]; };
+              "check:statix" = { exec = "statix check"; before = [ "devenv:enterTest" ]; };
+              "check:deadnix" = { exec = "deadnix --fail --no-lambda-arg --no-lambda-pattern-names"; before = [ "devenv:enterTest" ]; };
+              "check:flake" = { exec = "nix flake check --print-build-logs --keep-going"; before = [ "devenv:enterTest" ]; };
+              "fix:format".exec = "treefmt";
+              "fix:statix".exec = "statix fix";
+              "fix:deadnix".exec = "deadnix --edit --no-lambda-arg --no-lambda-pattern-names";
+            };
+          }
+          EOF
+
+          cat > devenv.nix <<'EOF'
+          { lib, ... }:
+          let
+            caretakerModules = builtins.filter
+              (path: builtins.baseNameOf path == "caretaker.nix")
+              (lib.filesystem.listFilesRecursive ./.);
+          in {
+            imports = caretakerModules;
+            treefmt = { enable = true; config.programs.nixfmt.enable = true; };
+            git-hooks.hooks = {
+              treefmt.enable = true;
+              statix.enable = true;
+              deadnix.enable = true;
+              presentable = {
+                enable = true;
+                entry = "devenv test";
+                pass_filenames = false;
+                always_run = true;
+                stages = [ "pre-push" ];
+              };
+            };
+          }
+          EOF
+
+          cat > .stitch.json <<'EOF'
+          {
+            "role": "producer",
+            "layer": 2,
+            "dependencies": []
+          }
+          EOF
+
+          cat > README.md <<'EOF'
+          # Phenix tools
+
+          This flake is a thin package aggregator. `phenix-stitch` is the sole source of the repository graph and ordered-execution implementation; this repository only re-exports command packages used by the wider Phenix flake graph.
+          EOF
+
+          cat > .github/workflows/ci.yml <<'EOF'
+          name: CI
+          on:
+            pull_request:
+            push:
+              branches: [main]
+          permissions:
+            contents: read
+          jobs:
+            checks:
+              runs-on: ubuntu-latest
+              timeout-minutes: 60
+              steps:
+                - uses: actions/checkout@v5
+                  with: { fetch-depth: 0 }
+                - uses: cachix/install-nix-action@v31
+                  with:
+                    extra_nix_config: |
+                      experimental-features = nix-command flakes
+                      accept-flake-config = true
+                - run: nix flake check --print-build-logs --keep-going
+                - run: nix develop --no-pure-eval --command devenv test
+                - name: Reject duplicate implementations and retired references
+                  run: |
+                    test ! -d crates
+                    ! git grep -n -i '\btend\b'
+          EOF
+
+          rm -f .github/workflows/migrate-away-from-tend.yml
+          rm -f .github/workflows/finalize-tools-scope.yml
+          nix flake update
+          nix flake check --print-build-logs --keep-going
+          nix develop --no-pure-eval --command devenv test
+          ! git grep -n -i '\btend\b'
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "refactor: make phenix-tools a thin aggregator"
+          git push
