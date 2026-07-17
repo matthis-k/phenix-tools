@@ -255,7 +255,7 @@
                 echo "missing local flake $name at $path; run init-workspace" >&2
                 return 1
               fi
-              printf '%s\0%s\0%s\0' --override-input "$name" "path:$path"
+              printf '%s\0%s\0%s\0' --override-input "$name" "git+file://$path"
             done < <(jq -r '.[] | [.name, .path] | @tsv' <<< "$data")
           }
 
@@ -269,10 +269,10 @@
 
             case "$mode" in
               dev)
-                exec nix develop "path:$root" "''${overrides[@]}" "$@"
+                exec nix develop "git+file://$root" "''${overrides[@]}" "$@"
                 ;;
               check)
-                exec nix flake check "path:$root" "''${overrides[@]}" "$@"
+                exec nix flake check "git+file://$root" "''${overrides[@]}" "$@"
                 ;;
               overrides)
                 printf '%q ' "''${overrides[@]}"
