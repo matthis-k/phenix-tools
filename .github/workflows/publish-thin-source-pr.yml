@@ -58,17 +58,19 @@ jobs:
           fi
 
           git checkout HEAD -- .github/workflows
-          rm -f publication.log
 
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git commit -m "refactor: make phenix-tools a thin aggregator"
-          git push origin HEAD:refactor/thin-tools-maintenance
+          git reset -- publication.log
+          git status --short >> publication.log
+          git commit -m "refactor: make phenix-tools a thin aggregator" >> publication.log 2>&1
+          git push origin HEAD:refactor/thin-tools-maintenance >> publication.log 2>&1
+          tail -n 300 publication.log
       - name: Upload publication diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: thin-tools-publication-log
           path: publication.log
-          if-no-files-found: warn
+          if-no-files-found: error
