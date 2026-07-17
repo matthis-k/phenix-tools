@@ -6,7 +6,7 @@
     phenix-pins.url = "github:matthis-k/phenix-pins";
     nixpkgs.follows = "phenix-pins/nixpkgs";
     phenix-stitch = {
-      url = "github:matthis-k/phenix-stitch";
+      url = "github:matthis-k/phenix-stitch?ref=feat/local-workspace-management";
       inputs = {
         phenix-pins.follows = "phenix-pins";
         flake-parts.follows = "flake-parts";
@@ -22,7 +22,10 @@
         "x86_64-linux"
         "aarch64-linux"
       ];
-      imports = [ ./modules/standalone.nix ];
+      imports = [
+        ./modules/standalone.nix
+        ./modules/workspace.nix
+      ];
       flake.flakeModules.default = import ./modules/flake-module.nix;
     };
 }
