@@ -32,13 +32,21 @@ jobs:
           sed -n '/^        run: |$/,$p' .github/workflows/prepare-thin-tools-pr.yml \
             | tail -n +2 \
             | sed 's/^          //' > /tmp/generate.sh
-          sed -i '/^git config user.name github-actions\[bot\]$/,$d' /tmp/generate.sh
+          sed -i '/^needle=/,$d' /tmp/generate.sh
+
+          set +e
           bash /tmp/generate.sh > publication.log 2>&1
+          generate_status=$?
+          set -e
+          if (( generate_status != 0 )); then
+            tail -n 300 publication.log
+            exit "$generate_status"
+          fi
 
           rm -f CRATES.md generator.log
           audit_status=0
           if git grep -niE '(^|[^[:alnum:]_-])tend([^[:alnum:]_-]|$)' \
-            -- ':!.github/workflows/**' >> publication.log 2>&1; then
+            -- . ':(exclude).github/workflows/**' >> publication.log 2>&1; then
             audit_status=1
           fi
           test ! -d crates || audit_status=1
@@ -57,3 +65,10 @@ jobs:
           git add -A
           git commit -m "refactor: make phenix-tools a thin aggregator"
           git push origin HEAD:refactor/thin-tools-maintenance
+      - name: Upload publication diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: thin-tools-publication-log
+          path: publication.log
+          if-no-files-found: warn
