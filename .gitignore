@@ -1,3 +1,16 @@
+# Build outputs
 /target/
-.stitch/
+result
+result-*
+
+# Local development state
 .cache/
+.devenv/
+.direnv/
+.stitch/
+.pre-commit-config.yaml
+
+# Diagnostics and temporary migration state
+*.log
+*.log.*
+.maintenance-trigger
