@@ -3,10 +3,10 @@
 
   inputs = {
     flake-parts.url = "github:hercules-ci/flake-parts";
-    phenix-pins.url = "github:matthis-k/phenix-pins?ref=refactor/standalone-devenv-maintenance";
+    phenix-pins.url = "github:matthis-k/phenix-pins";
     nixpkgs.follows = "phenix-pins/nixpkgs";
     phenix-stitch = {
-      url = "github:matthis-k/phenix-stitch?ref=refactor/scoped-stitch-maintenance";
+      url = "github:matthis-k/phenix-stitch";
       inputs = {
         phenix-pins.follows = "phenix-pins";
         flake-parts.follows = "flake-parts";
