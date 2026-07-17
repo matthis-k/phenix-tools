@@ -1,4 +1,4 @@
-name: Run thin tools generator
+name: Run thin tools generator after Stitch
 
 on:
   pull_request:
