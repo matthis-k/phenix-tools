@@ -22,7 +22,10 @@
         "x86_64-linux"
         "aarch64-linux"
       ];
-      imports = [ ./modules/standalone.nix ];
+      imports = [
+        ./modules/standalone.nix
+        ./modules/workspace.nix
+      ];
       flake.flakeModules.default = import ./modules/flake-module.nix;
     };
 }

@@ -1,11 +1,17 @@
 { inputs, ... }:
 {
   perSystem =
-    { pkgs, system, ... }:
+    {
+      config,
+      pkgs,
+      system,
+      ...
+    }:
     let
       stitch = inputs.phenix-stitch.packages.${system}.stitch;
       stitchMcp = inputs.phenix-stitch.packages.${system}.stitch-mcp;
       opencode = inputs.phenix-opencode.packages.${system}.default;
+      workspace = config.packages.phenix-workspace;
     in
     {
       packages = {
@@ -27,6 +33,7 @@
       checks = {
         stitch-package = stitch;
         stitch-mcp-package = stitchMcp;
+        phenix-workspace-package = workspace;
       };
 
       devShells.default = pkgs.mkShell {
@@ -37,12 +44,14 @@
           pkgs.nix
           stitch
           stitchMcp
+          workspace
         ];
         shellHook = ''
           echo "phenix-tools thin aggregator"
           echo "  maintenance: devenv test"
           echo "  fixes:       devenv tasks run maintenance:fix"
           echo "  stitch:      $(stitch --version 2>/dev/null || echo '?')"
+          echo "  workspace:   phenix-workspace --help"
         '';
       };
     };
