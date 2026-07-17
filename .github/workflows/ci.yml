@@ -32,20 +32,7 @@ jobs:
       - name: Install devenv
         run: nix profile add nixpkgs#devenv
       - name: Run repository maintenance
-        shell: bash
-        run: |
-          set +e
-          devenv test > devenv-test.log 2>&1
-          status=$?
-          tail -n 400 devenv-test.log
-          exit "$status"
-      - name: Upload diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: nixdev-diagnostics
-          path: devenv-test.log
-          if-no-files-found: error
+        run: devenv test
       - name: Enforce aggregation boundary
         shell: bash
         run: |
