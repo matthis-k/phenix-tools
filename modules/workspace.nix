@@ -263,7 +263,7 @@
             local mode="$1"
             shift
             local -a overrides=()
-            while IFS= read -r -d '' value; do
+            while IFS= read -r -d $'\0' value; do
               overrides+=("$value")
             done < <(local_overrides)
 
