@@ -1,0 +1,5 @@
+{
+  "role": "producer",
+  "layer": 2,
+  "dependencies": ["phenix-stitch"]
+}

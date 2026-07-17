@@ -1,3 +1,7 @@
 /target/
 .stitch/
 .cache/
+
+.devenv/
+.direnv/
+.pre-commit-config.yaml

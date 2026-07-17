@@ -1,11 +1,18 @@
 {
-  description = "Phenix cross-repo developer and maintenance tooling";
+  description = "Thin aggregation of Phenix command-line tools";
 
   inputs = {
     flake-parts.url = "github:hercules-ci/flake-parts";
-    phenix-pins.url = "github:matthis-k/phenix-pins";
-    phenix-opencode.url = "github:matthis-k/phenix-opencode";
+    phenix-pins.url = "github:matthis-k/phenix-pins?ref=refactor/standalone-devenv-maintenance";
     nixpkgs.follows = "phenix-pins/nixpkgs";
+    phenix-stitch = {
+      url = "github:matthis-k/phenix-stitch?ref=refactor/scoped-stitch-maintenance";
+      inputs = {
+        phenix-pins.follows = "phenix-pins";
+        flake-parts.follows = "flake-parts";
+      };
+    };
+    phenix-opencode.url = "github:matthis-k/phenix-opencode";
   };
 
   outputs =
