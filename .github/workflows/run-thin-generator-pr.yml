@@ -12,6 +12,8 @@ jobs:
     if: github.event.pull_request.head.ref == 'refactor/thin-tools-maintenance'
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -24,6 +26,28 @@ jobs:
             accept-flake-config = true
       - uses: cachix/cachix-action@v17
         with: { name: devenv }
+      - name: Wait for scoped Stitch branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 90); do
+            flake="$({ gh api \
+              -H 'Accept: application/vnd.github.raw+json' \
+              'repos/matthis-k/phenix-stitch/contents/flake.nix?ref=refactor%2Fscoped-stitch-maintenance' \
+              2>/dev/null || true; })"
+            readme="$({ gh api \
+              -H 'Accept: application/vnd.github.raw+json' \
+              'repos/matthis-k/phenix-stitch/contents/README.md?ref=refactor%2Fscoped-stitch-maintenance' \
+              2>/dev/null || true; })"
+            if [[ "$flake" == *'Dependency-aware ordered execution'* ]] \
+              && [[ "$flake" != *'phenix-tend'* ]] \
+              && [[ "$readme" == *'Stitch does not know how a repository is tested'* ]]; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo 'Scoped Stitch branch did not become ready' >&2
+          exit 1
       - name: Execute branch generator
         shell: bash
         run: |
@@ -32,4 +56,15 @@ jobs:
             | tail -n +2 \
             | sed 's/^          //' > /tmp/generate.sh
           sed -i '/git config user.name/i rm -f .github/workflows/run-thin-generator-pr.yml' /tmp/generate.sh
-          bash /tmp/generate.sh
+          set +e
+          bash /tmp/generate.sh > generator.log 2>&1
+          status=$?
+          tail -n 400 generator.log
+          exit "$status"
+      - name: Upload generator diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: thin-tools-generator-log
+          path: generator.log
+          if-no-files-found: warn
