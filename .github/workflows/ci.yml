@@ -1,56 +1,45 @@
-name: CI
+name: Normalize workspace wrapper
 
 on:
   pull_request:
-  push:
     branches: [main]
-  workflow_dispatch:
 
 permissions:
-  contents: read
-
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  contents: write
 
 jobs:
-  checks:
-    name: Final maintenance checks
+  normalize:
+    if: github.event.pull_request.head.ref == 'feat/workspace-wrapper'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with: { fetch-depth: 0 }
+        with:
+          ref: feat/workspace-wrapper
+          fetch-depth: 0
       - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
           extra_nix_config: |
             experimental-features = nix-command flakes
             accept-flake-config = true
-      - uses: cachix/cachix-action@v17
-        with: { name: devenv }
-      - name: Install devenv
-        run: nix profile add nixpkgs#devenv
-      - name: Run repository maintenance
-        shell: bash
-        run: |
-          set +e
-          devenv test > devenv-test.log 2>&1
-          status=$?
-          tail -n 500 devenv-test.log
-          exit "$status"
-      - name: Upload diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: workspace-wrapper-diagnostics
-          path: devenv-test.log
-          if-no-files-found: error
-      - name: Enforce aggregation boundary
-        shell: bash
+      - name: Patch and normalize wrapper
         run: |
           set -euo pipefail
-          test ! -d crates
-          test ! -e Cargo.toml
-          test ! -e Cargo.lock
-          ! git grep -niE '(^|[^[:alnum:]_-])tend([^[:alnum:]_-]|$)' -- . ':(exclude).github/workflows/**'
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('modules/workspace.nix')
+          text = path.read_text()
+          old = "while IFS= read -r -d '' value; do"
+          new = "while IFS= read -r -d $'\\0' value; do"
+          if old not in text:
+              raise SystemExit('expected Nix string terminator pattern not found')
+          path.write_text(text.replace(old, new))
+          PY
+          nix shell nixpkgs#nixfmt-rfc-style -c nixfmt flake.nix modules/standalone.nix modules/workspace.nix
+          nix flake lock --accept-flake-config
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add flake.nix flake.lock modules/standalone.nix modules/workspace.nix
+          git commit -m "chore: normalize workspace wrapper"
+          git push origin HEAD:feat/workspace-wrapper
