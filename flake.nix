@@ -6,7 +6,7 @@
     phenix-pins.url = "github:matthis-k/phenix-pins";
     nixpkgs.follows = "phenix-pins/nixpkgs";
     phenix-stitch = {
-      url = "github:matthis-k/phenix-stitch?ref=feat/local-workspace-management";
+      url = "github:matthis-k/phenix-stitch";
       inputs = {
         phenix-pins.follows = "phenix-pins";
         flake-parts.follows = "flake-parts";
