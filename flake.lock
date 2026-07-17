@@ -414,16 +414,15 @@
         ]
       },
       "locked": {
-        "lastModified": 1784309879,
+        "lastModified": 1784310259,
         "narHash": "sha256-IsIlXwH6+6O0sQ3dPRH5/N8HgP1IU8xwdr+2c7nqrTw=",
         "owner": "matthis-k",
         "repo": "phenix-stitch",
-        "rev": "99d3efd41355d1f4fdda05d407c91d0955aef0ce",
+        "rev": "3d66b56cb270b2948c134e9bbb6299deb96270b1",
         "type": "github"
       },
       "original": {
         "owner": "matthis-k",
-        "ref": "feat/local-workspace-management",
         "repo": "phenix-stitch",
         "type": "github"
       }
