@@ -24,8 +24,9 @@
             init [--dry-run]              clone missing repositories and fast-forward clean ones
             sync [--dry-run]              alias for init
             clean [--apply] [--force]     remove obsolete wrapper-managed clones
-            dev [NIX-DEVELOP-ARGS...]     enter the root dev shell with local flake overrides
-            check [NIX-CHECK-ARGS...]     run the root flake check with local overrides
+            nix NIX-COMMAND...            run Nix from the workspace root with local flake overrides
+            dev [NIX-DEVELOP-ARGS...]     alias for: nix develop
+            check [NIX-CHECK-ARGS...]     alias for: nix flake check
             overrides                     print generated --override-input arguments
           EOF
           }
@@ -259,34 +260,52 @@
             done < <(jq -r '.[] | [.name, .path] | @tsv' <<< "$data")
           }
 
-          run_local_nix() {
-            local mode="$1"
-            shift
-            local -a overrides=()
+          collect_overrides() {
+            local -n output="$1"
             while IFS= read -r -d $'\0' value; do
-              overrides+=("$value")
+              output+=("$value")
             done < <(local_overrides)
+          }
 
-            case "$mode" in
-              dev)
-                exec nix develop "git+file://$root" "''${overrides[@]}" "$@"
+          run_nix() {
+            [[ $# -gt 0 ]] || { echo "nix requires a command" >&2; exit 2; }
+
+            local -a overrides=()
+            collect_overrides overrides
+            cd "$root"
+
+            local primary="$1"
+            shift
+            case "$primary" in
+              flake)
+                [[ $# -gt 0 ]] || { echo "nix flake requires a subcommand" >&2; exit 2; }
+                local secondary="$1"
+                shift
+                exec nix flake "$secondary" "''${overrides[@]}" "$@"
                 ;;
-              check)
-                exec nix flake check "git+file://$root" "''${overrides[@]}" "$@"
+              -h|--help|--version)
+                exec nix "$primary" "$@"
                 ;;
-              overrides)
-                printf '%q ' "''${overrides[@]}"
-                printf '\n'
+              *)
+                exec nix "$primary" "''${overrides[@]}" "$@"
                 ;;
             esac
+          }
+
+          print_overrides() {
+            local -a overrides=()
+            collect_overrides overrides
+            printf '%q ' "''${overrides[@]}"
+            printf '\n'
           }
 
           case "$command" in
             init|sync) init_workspace "$@" ;;
             clean) clean_workspace "$@" ;;
-            dev) run_local_nix dev "$@" ;;
-            check) run_local_nix check "$@" ;;
-            overrides) run_local_nix overrides "$@" ;;
+            nix) run_nix "$@" ;;
+            dev) run_nix develop "$@" ;;
+            check) run_nix flake check "$@" ;;
+            overrides) print_overrides ;;
             *) usage >&2; exit 2 ;;
           esac
         '';

@@ -8,8 +8,12 @@ This flake aggregates Phenix command-line tools without duplicating their implem
 phenix-workspace init
 phenix-workspace clean
 phenix-workspace clean --apply
-phenix-workspace dev
-phenix-workspace check
+phenix-workspace nix flake check
+phenix-workspace nix develop
 ```
 
-The wrapper clones missing repositories into the root-owned workspace, fast-forwards clean repositories, and removes only obsolete clones carrying its private marker. `dev` and `check` invoke Nix with `path:` overrides for every local flake, so uncommitted local source changes are evaluated without changing the production lock file.
+The wrapper clones missing repositories into the root-owned workspace, fast-forwards clean repositories, and removes only obsolete clones carrying its private marker.
+
+The `nix` command changes to the workspace root and forwards the requested Nix subcommand with `git+file:` overrides for every local Phenix flake. Dirty tracked changes are evaluated immediately without changing the production lock file. Newly created source files must be added to Git's index, but do not need to be committed.
+
+`dev` and `check` remain convenience aliases for `nix develop` and `nix flake check`.
