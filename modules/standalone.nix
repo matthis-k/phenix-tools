@@ -12,6 +12,12 @@
       stitchMcp = inputs.phenix-stitch.packages.${system}.stitch-mcp;
       opencode = inputs.phenix-opencode.packages.${system}.default;
       workspace = config.packages.phenix-workspace;
+      workspaceInterface = pkgs.runCommand "phenix-workspace-interface" { nativeBuildInputs = [ workspace ]; } ''
+        phenix-workspace --help > "$out"
+        grep -q 'nix NIX-COMMAND' "$out"
+        grep -q 'alias for: nix develop' "$out"
+        grep -q 'alias for: nix flake check' "$out"
+      '';
     in
     {
       packages = {
@@ -34,6 +40,7 @@
         stitch-package = stitch;
         stitch-mcp-package = stitchMcp;
         phenix-workspace-package = workspace;
+        phenix-workspace-interface = workspaceInterface;
       };
 
       devShells.default = pkgs.mkShell {
