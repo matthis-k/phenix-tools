@@ -1,60 +1,43 @@
-name: Normalize local Git overrides
+name: CI
 
 on:
   pull_request:
+  push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  normalize:
-    if: github.event.pull_request.head.ref == 'feat/workspace-wrapper'
+  checks:
+    name: Final maintenance checks
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          ref: feat/workspace-wrapper
-          fetch-depth: 0
+        with: { fetch-depth: 0 }
       - uses: cachix/install-nix-action@a49548c11d9846ad46ecc0115273879b045f001c # v31
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
           extra_nix_config: |
             experimental-features = nix-command flakes
             accept-flake-config = true
-      - name: Use local Git flake URLs
+      - uses: cachix/cachix-action@v17
+        with: { name: devenv }
+      - name: Install devenv
+        run: nix profile add nixpkgs#devenv
+      - name: Run repository maintenance
+        run: devenv test
+      - name: Enforce aggregation boundary
+        shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('modules/workspace.nix')
-          text = path.read_text()
-          replacements = {
-              '"path:$path"': '"git+file://$path"',
-              'nix develop "path:$root"': 'nix develop "git+file://$root"',
-              'nix flake check "path:$root"': 'nix flake check "git+file://$root"',
-          }
-          for old, new in replacements.items():
-              if old not in text:
-                  raise SystemExit(f'expected pattern not found: {old}')
-              text = text.replace(old, new)
-          path.write_text(text)
-
-          readme = Path('README.md')
-          text = readme.read_text().replace(
-              'Nix `path:` input overrides',
-              'local Git flake input overrides',
-          ).replace(
-              'Local uncommitted source changes are evaluated directly.',
-              'Dirty tracked source changes are evaluated directly; new files only need to be added to Git, not committed.',
-          )
-          readme.write_text(text)
-          PY
-          nix shell nixpkgs#nixfmt-rfc-style -c nixfmt modules/workspace.nix
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add modules/workspace.nix README.md
-          git commit -m "refactor: use local Git flake overrides"
-          git push origin HEAD:feat/workspace-wrapper
+          test ! -d crates
+          test ! -e Cargo.toml
+          test ! -e Cargo.lock
+          ! git grep -niE '(^|[^[:alnum:]_-])tend([^[:alnum:]_-]|$)' -- . ':(exclude).github/workflows/**'
