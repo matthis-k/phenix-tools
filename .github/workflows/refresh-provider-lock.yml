@@ -1,0 +1,36 @@
+name: Refresh merged-provider lock
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.event.pull_request.head.ref == 'refactor/thin-tools-maintenance'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/thin-tools-maintenance
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+      - name: Refresh lock
+        run: |
+          set -euo pipefail
+          nix flake lock --accept-flake-config
+          if git diff --quiet -- flake.lock; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add flake.lock
+          git commit -m "chore: repin merged providers"
+          git push origin HEAD:refactor/thin-tools-maintenance
