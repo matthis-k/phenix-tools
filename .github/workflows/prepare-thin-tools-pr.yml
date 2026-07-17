@@ -1,0 +1,311 @@
+name: Prepare thin tools PR
+
+on:
+  push:
+    branches: [refactor/thin-tools-maintenance]
+    paths: [.github/workflows/prepare-thin-tools-pr.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refactor/thin-tools-maintenance
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            accept-flake-config = true
+      - uses: cachix/cachix-action@v17
+        with: { name: devenv }
+      - name: Replace duplicate implementation with aggregation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf crates Cargo.toml Cargo.lock modules
+          rm -f .tend.json .maintenance-failure.log
+          mkdir -p modules
+
+          cat > flake.nix <<'EOF'
+          {
+            description = "Thin aggregation of Phenix command-line tools";
+
+            inputs = {
+              flake-parts.url = "github:hercules-ci/flake-parts";
+              phenix-pins.url = "github:matthis-k/phenix-pins?ref=refactor/standalone-devenv-maintenance";
+              nixpkgs.follows = "phenix-pins/nixpkgs";
+              phenix-stitch = {
+                url = "github:matthis-k/phenix-stitch?ref=refactor/scoped-stitch-maintenance";
+                inputs = {
+                  phenix-pins.follows = "phenix-pins";
+                  flake-parts.follows = "flake-parts";
+                };
+              };
+              phenix-opencode.url = "github:matthis-k/phenix-opencode";
+            };
+
+            outputs = inputs@{ flake-parts, ... }:
+              flake-parts.lib.mkFlake { inherit inputs; } {
+                systems = [ "x86_64-linux" "aarch64-linux" ];
+                imports = [ ./modules/standalone.nix ];
+                flake.flakeModules.default = import ./modules/flake-module.nix;
+              };
+          }
+          EOF
+
+          cat > modules/standalone.nix <<'EOF'
+          { inputs, ... }:
+          {
+            perSystem =
+              { pkgs, system, ... }:
+              let
+                stitch = inputs.phenix-stitch.packages.${system}.stitch;
+                stitchMcp = inputs.phenix-stitch.packages.${system}.stitch-mcp;
+                opencode = inputs.phenix-opencode.packages.${system}.default;
+              in
+              {
+                packages = {
+                  inherit stitch opencode;
+                  stitch-mcp = stitchMcp;
+                  default = stitch;
+                };
+
+                apps = {
+                  stitch = inputs.phenix-stitch.apps.${system}.stitch;
+                  stitch-mcp = inputs.phenix-stitch.apps.${system}.stitch-mcp;
+                  opencode = {
+                    type = "app";
+                    program = "${opencode}/bin/opencode";
+                  };
+                  default = inputs.phenix-stitch.apps.${system}.stitch;
+                };
+
+                checks = {
+                  stitch-package = stitch;
+                  stitch-mcp-package = stitchMcp;
+                };
+
+                devShells.default = pkgs.mkShell {
+                  name = "phenix-tools-dev";
+                  packages = [
+                    pkgs.devenv
+                    pkgs.git
+                    pkgs.nix
+                    stitch
+                    stitchMcp
+                  ];
+                  shellHook = ''
+                    echo "phenix-tools thin aggregator"
+                    echo "  maintenance: devenv test"
+                    echo "  fixes:       devenv tasks run maintenance:fix"
+                    echo "  stitch:      $(stitch --version 2>/dev/null || echo '?')"
+                  '';
+                };
+              };
+          }
+          EOF
+
+          cat > modules/flake-module.nix <<'EOF'
+          { inputs, ... }:
+          {
+            perSystem =
+              { system, ... }:
+              {
+                phenixWrapped.stitch = inputs.phenix-tools.packages.${system}.stitch;
+              };
+          }
+          EOF
+
+          cat > devenv.yaml <<'EOF'
+          # yaml-language-server: $schema=https://devenv.sh/devenv.schema.json
+          inputs:
+            nixpkgs:
+              url: github:NixOS/nixpkgs/nixos-unstable
+          EOF
+
+          cat > devenv.nix <<'EOF'
+          { lib, ... }:
+          let
+            maintenanceModules = builtins.filter (path: builtins.baseNameOf path == "maintenance.nix") (
+              lib.filesystem.listFilesRecursive ./.
+            );
+          in
+          {
+            imports = maintenanceModules;
+            enterTest = "";
+          }
+          EOF
+
+          cat > maintenance.nix <<'EOF'
+          { pkgs, ... }:
+          let
+            root = ''repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; cd "$repo_root"'';
+            nixSources = "find . -type f -name '*.nix' -not -path './.git/*' -not -path './.devenv/*'";
+          in
+          {
+            scripts = {
+              "maintenance-check-format" = {
+                packages = [ pkgs.findutils pkgs.git pkgs.nixfmt ];
+                exec = ''${root}; ${nixSources} -exec nixfmt --check {} +'';
+              };
+              "maintenance-check-statix" = {
+                packages = [ pkgs.git pkgs.statix ];
+                exec = ''${root}; statix check --ignore '.git/**' '';
+              };
+              "maintenance-check-deadnix" = {
+                packages = [ pkgs.deadnix pkgs.git ];
+                exec = ''${root}; deadnix --fail --no-lambda-arg --no-lambda-pattern-names'';
+              };
+              "maintenance-check-flake" = {
+                packages = [ pkgs.git pkgs.nix ];
+                exec = ''${root}; nix flake check --print-build-logs --keep-going'';
+              };
+              "maintenance-check-boundary" = {
+                packages = [ pkgs.git pkgs.coreutils ];
+                exec = ''
+                  ${root}
+                  test ! -d crates
+                  test ! -e Cargo.toml
+                  test ! -e Cargo.lock
+                '';
+              };
+              "maintenance-fix-statix" = {
+                packages = [ pkgs.git pkgs.statix ];
+                exec = ''${root}; statix fix'';
+              };
+              "maintenance-fix-deadnix" = {
+                packages = [ pkgs.deadnix pkgs.git ];
+                exec = ''${root}; deadnix --edit --no-lambda-arg --no-lambda-pattern-names'';
+              };
+              "maintenance-fix-format" = {
+                packages = [ pkgs.findutils pkgs.git pkgs.nixfmt ];
+                exec = ''${root}; ${nixSources} -exec nixfmt {} +'';
+              };
+            };
+
+            tasks = {
+              "maintenance:format".exec = "maintenance-check-format";
+              "maintenance:statix".exec = "maintenance-check-statix";
+              "maintenance:deadnix".exec = "maintenance-check-deadnix";
+              "maintenance:flake".exec = "maintenance-check-flake";
+              "maintenance:boundary".exec = "maintenance-check-boundary";
+              "maintenance:check" = {
+                exec = "true";
+                after = [
+                  "maintenance:format"
+                  "maintenance:statix"
+                  "maintenance:deadnix"
+                  "maintenance:flake"
+                  "maintenance:boundary"
+                ];
+                before = [ "devenv:enterTest" ];
+              };
+              "maintenance:fix:statix".exec = "maintenance-fix-statix";
+              "maintenance:fix:deadnix" = {
+                exec = "maintenance-fix-deadnix";
+                after = [ "maintenance:fix:statix" ];
+              };
+              "maintenance:fix:format" = {
+                exec = "maintenance-fix-format";
+                after = [ "maintenance:fix:deadnix" ];
+              };
+              "maintenance:fix" = {
+                exec = "true";
+                after = [ "maintenance:fix:format" ];
+              };
+            };
+          }
+          EOF
+
+          cat > README.md <<'EOF'
+          # Phenix tools
+
+          This flake is a thin package aggregator. `phenix-stitch` is the sole source of the repository graph and ordered-execution implementation. This repository only re-exports command packages used by the wider Phenix flake graph.
+          EOF
+
+          cat > .stitch.json <<'EOF'
+          {
+            "role": "producer",
+            "layer": 2,
+            "dependencies": ["phenix-stitch"]
+          }
+          EOF
+
+          cat > .github/workflows/ci.yml <<'EOF'
+          name: CI
+
+          on:
+            pull_request:
+            push:
+              branches: [main]
+            workflow_dispatch:
+
+          permissions:
+            contents: read
+
+          concurrency:
+            group: ci-${{ github.workflow }}-${{ github.ref }}
+            cancel-in-progress: true
+
+          jobs:
+            checks:
+              name: Maintenance checks
+              runs-on: ubuntu-latest
+              timeout-minutes: 90
+              steps:
+                - uses: actions/checkout@v5
+                  with: { fetch-depth: 0 }
+                - uses: cachix/install-nix-action@v31
+                  with:
+                    extra_nix_config: |
+                      experimental-features = nix-command flakes
+                      accept-flake-config = true
+                - uses: cachix/cachix-action@v17
+                  with: { name: devenv }
+                - run: nix profile add nixpkgs#devenv
+                - name: Run repository maintenance
+                  shell: bash
+                  run: |
+                    set +e
+                    devenv test > devenv-test.log 2>&1
+                    status=$?
+                    tail -n 300 devenv-test.log
+                    exit "$status"
+                - name: Upload diagnostics
+                  if: failure()
+                  uses: actions/upload-artifact@v4
+                  with:
+                    name: devenv-test-log
+                    path: devenv-test.log
+                    if-no-files-found: error
+          EOF
+
+          printf '\n.devenv/\n.direnv/\n.pre-commit-config.yaml\n' >> .gitignore
+
+          rm -f \
+            .github/workflows/prepare-thin-tools-pr.yml \
+            .github/workflows/finalize-tools-scope.yml \
+            .github/workflows/run-maintenance.yml \
+            .github/workflows/migrate-away-from-tend.yml \
+            .maintenance-failure.log
+
+          nix profile add nixpkgs#devenv
+          devenv tasks run maintenance:fix
+          nix flake lock
+          devenv test
+
+          needle="$(printf 'te%s' 'nd')"
+          ! git grep -ni "$needle"
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "refactor: make phenix-tools a thin aggregator"
+          git push origin HEAD:refactor/thin-tools-maintenance
