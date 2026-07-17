@@ -1,4 +1,4 @@
-name: Prepare thin tools PR
+name: Prepare thin tools branch
 
 on:
   push:
