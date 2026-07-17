@@ -57,6 +57,7 @@ jobs:
             exit 1
           fi
 
+          git clean -fd .github/workflows
           git checkout HEAD -- .github/workflows
 
           git config user.name github-actions[bot]
