@@ -386,16 +386,15 @@
         "sops-nix": "sops-nix"
       },
       "locked": {
-        "lastModified": 1784281523,
-        "narHash": "sha256-cB5SqvemhnY8nxi++pqHt4teqDcfxgvttu8lQycprZI=",
+        "lastModified": 1784302653,
+        "narHash": "sha256-PpW/9z+ahzOVo64Op5Fm98mxpNDtVze2ejKQvKdmBJo=",
         "owner": "matthis-k",
         "repo": "phenix-pins",
-        "rev": "8994de58ab039ac21504b7d05bfb703049e447e2",
+        "rev": "adc17b05d747863a9f82d3a0f8721fbc9e7a1823",
         "type": "github"
       },
       "original": {
         "owner": "matthis-k",
-        "ref": "refactor/standalone-devenv-maintenance",
         "repo": "phenix-pins",
         "type": "github"
       }
@@ -415,16 +414,15 @@
         ]
       },
       "locked": {
-        "lastModified": 1784297329,
-        "narHash": "sha256-RsyDXJyuGDasLaEpQu5mJK/cAwjI84IiGXiTu8g6BEo=",
+        "lastModified": 1784302822,
+        "narHash": "sha256-j5qAhJ3wlKyXe6/H8XeHYm11B/0N2h1CiFe8M6cbspw=",
         "owner": "matthis-k",
         "repo": "phenix-stitch",
-        "rev": "83de9df3ad3c4208355723639cdc9f289fc72eec",
+        "rev": "83c1c1b25e8af6cfc9ec548cfb896aa71c6360fd",
         "type": "github"
       },
       "original": {
         "owner": "matthis-k",
-        "ref": "refactor/scoped-stitch-maintenance",
         "repo": "phenix-stitch",
         "type": "github"
       }
