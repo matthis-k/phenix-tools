@@ -25,6 +25,7 @@
       imports = [
         ./modules/standalone.nix
         ./modules/workspace.nix
+        ./modules/development.nix
       ];
       flake.flakeModules.default = import ./modules/flake-module.nix;
     };
