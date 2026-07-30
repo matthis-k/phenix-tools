@@ -34,14 +34,16 @@ _: {
             return 1
           }
 
-          export PHENIX_ROOT="$(find_root)"
+          PHENIX_ROOT="$(find_root)"
+          export PHENIX_ROOT
           export PHENIX_DEV=1
 
           exec phenix-workspace --root "$PHENIX_ROOT" dev "$@"
         '';
       };
       interfaceCheck = pkgs.runCommand "phenix-dev-interface" { } ''
-        grep -Fq 'export PHENIX_ROOT=' ${phenixDev}/bin/phenix-dev
+        grep -Fq 'PHENIX_ROOT="$(find_root)"' ${phenixDev}/bin/phenix-dev
+        grep -Fq 'export PHENIX_ROOT' ${phenixDev}/bin/phenix-dev
         grep -Fq 'export PHENIX_DEV=1' ${phenixDev}/bin/phenix-dev
         grep -Fq 'phenix-workspace --root "$PHENIX_ROOT" dev' ${phenixDev}/bin/phenix-dev
         touch "$out"
