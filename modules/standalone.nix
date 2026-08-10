@@ -10,12 +10,12 @@
     let
       stitch = inputs.phenix-stitch.packages.${system}.stitch;
       stitchMcp = inputs.phenix-stitch.packages.${system}.stitch-mcp;
-      opencode = inputs.phenix-opencode.packages.${system}.default;
+      phenix = inputs.phenix-agent-harness.packages.${system}.default;
       workspace = config.packages.phenix-workspace;
     in
     {
       packages = {
-        inherit stitch opencode;
+        inherit stitch phenix;
         stitch-mcp = stitchMcp;
         default = stitch;
       };
@@ -23,10 +23,7 @@
       apps = {
         stitch = inputs.phenix-stitch.apps.${system}.stitch;
         stitch-mcp = inputs.phenix-stitch.apps.${system}.stitch-mcp;
-        opencode = {
-          type = "app";
-          program = "${opencode}/bin/opencode";
-        };
+        phenix = inputs.phenix-agent-harness.apps.${system}.default;
         default = inputs.phenix-stitch.apps.${system}.stitch;
       };
 
