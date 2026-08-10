@@ -97,7 +97,11 @@
               nix-format = {
                 description = "Nix formatting";
                 ci = sourceCi // { stepName = "Nix formatting"; };
-                runtimeInputs = pkgs: [ pkgs.findutils pkgs.git pkgs.nixfmt ];
+                runtimeInputs = pkgs: [
+                  pkgs.findutils
+                  pkgs.git
+                  pkgs.nixfmt
+                ];
                 exec = ''
                   ${repositoryRoot}
                   find . -type f -name '*.nix' -not -path './.git/*' -print0 |
@@ -107,7 +111,10 @@
               statix = {
                 description = "Nix static analysis";
                 ci = sourceCi // { stepName = "Statix"; };
-                runtimeInputs = pkgs: [ pkgs.git pkgs.statix ];
+                runtimeInputs = pkgs: [
+                  pkgs.git
+                  pkgs.statix
+                ];
                 exec = ''
                   ${repositoryRoot}
                   statix check --ignore '.git/**'
@@ -116,7 +123,10 @@
               deadnix = {
                 description = "Unused Nix code";
                 ci = sourceCi // { stepName = "Deadnix"; };
-                runtimeInputs = pkgs: [ pkgs.deadnix pkgs.git ];
+                runtimeInputs = pkgs: [
+                  pkgs.deadnix
+                  pkgs.git
+                ];
                 exec = ''
                   ${repositoryRoot}
                   deadnix --fail --no-lambda-arg --no-lambda-pattern-names
@@ -125,7 +135,11 @@
               actionlint = {
                 description = "GitHub Actions syntax";
                 ci = sourceCi // { stepName = "Actionlint"; };
-                runtimeInputs = pkgs: [ pkgs.actionlint pkgs.findutils pkgs.git ];
+                runtimeInputs = pkgs: [
+                  pkgs.actionlint
+                  pkgs.findutils
+                  pkgs.git
+                ];
                 exec = ''
                   ${repositoryRoot}
                   find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print0 |
@@ -135,7 +149,10 @@
               boundary = {
                 description = "Keep phenix-tools a thin Nix aggregator";
                 ci = sourceCi // { stepName = "Repository boundary"; };
-                runtimeInputs = pkgs: [ pkgs.coreutils pkgs.git ];
+                runtimeInputs = pkgs: [
+                  pkgs.coreutils
+                  pkgs.git
+                ];
                 exec = ''
                   ${repositoryRoot}
                   test ! -d crates
@@ -146,7 +163,11 @@
               workflow-sync = {
                 description = "Committed workflow matches the maintenance declaration";
                 ci = sourceCi // { stepName = "Generated workflow"; };
-                runtimeInputs = pkgs: [ pkgs.diffutils pkgs.git pkgs.nix ];
+                runtimeInputs = pkgs: [
+                  pkgs.diffutils
+                  pkgs.git
+                  pkgs.nix
+                ];
                 exec = ''
                   ${repositoryRoot}
                   system="$(nix eval --impure --raw --expr builtins.currentSystem)"
@@ -165,7 +186,11 @@
             commands.phenix-dev = {
               description = "Exercise workspace discovery and nix develop through phenix-dev";
               ci = productCi // { stepName = "Phenix dev workspace flow"; };
-              runtimeInputs = pkgs: [ phenixDev pkgs.git pkgs.nix ];
+              runtimeInputs = pkgs: [
+                phenixDev
+                pkgs.git
+                pkgs.nix
+              ];
               exec = ''
                 tmp="$(mktemp -d)"
                 trap 'rm -rf "$tmp"' EXIT
@@ -185,11 +210,7 @@
                   inputs.nixpkgs.url = "path:${pkgs.path}";
                   outputs = { nixpkgs, ... }: {
                     devShells.${pkgs.system}.default = nixpkgs.legacyPackages.${pkgs.system}.mkShell {
-                      shellHook = ''
-                        test "\$PHENIX_DEV" = 1
-                        test "\$PHENIX_ROOT" = "$workspace_root"
-                        touch "$workspace_root/entered"
-                      '';
+                      shellHook = "test \"\$PHENIX_DEV\" = 1\ntest \"\$PHENIX_ROOT\" = \"$workspace_root\"\ntouch \"$workspace_root/entered\"\n";
                     };
                   };
                 }
@@ -213,7 +234,13 @@
 
           fix = {
             description = "Apply deterministic Nix normalization";
-            runtimeInputs = pkgs: [ pkgs.deadnix pkgs.findutils pkgs.git pkgs.nixfmt pkgs.statix ];
+            runtimeInputs = pkgs: [
+              pkgs.deadnix
+              pkgs.findutils
+              pkgs.git
+              pkgs.nixfmt
+              pkgs.statix
+            ];
             exec = ''
               ${repositoryRoot}
               statix fix
@@ -244,7 +271,11 @@
 
       devShells.maintenance = pkgs.mkShell {
         name = "phenix-tools-maintenance";
-        packages = [ pkgs.git pkgs.nix maintenancePackage.package ];
+        packages = [
+          pkgs.git
+          pkgs.nix
+          maintenancePackage.package
+        ];
         shellHook = maintenancePackage.shellHook;
       };
     };
