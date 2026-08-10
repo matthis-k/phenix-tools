@@ -2,12 +2,12 @@
   description = "Thin aggregation of Phenix command-line tools";
 
   inputs = {
-    flake-parts.url = "github:hercules-ci/flake-parts";
     phenix-flake-ci.url = "github:matthis-k/phenix-flake-ci";
     phenix-pins = {
       url = "github:matthis-k/phenix-pins";
       inputs.phenix-flake-ci.follows = "phenix-flake-ci";
     };
+    flake-parts.follows = "phenix-pins/flake-parts";
     nixpkgs.follows = "phenix-pins/nixpkgs";
     phenix-stitch = {
       url = "github:matthis-k/phenix-stitch";
