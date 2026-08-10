@@ -91,7 +91,6 @@
               "deadnix"
               "actionlint"
               "boundary"
-              "flake-eval"
               "workflow-sync"
             ];
             commands = {
@@ -142,15 +141,6 @@
                   test ! -d crates
                   test ! -e Cargo.toml
                   test ! -e Cargo.lock
-                '';
-              };
-              flake-eval = {
-                description = "Flake output evaluation";
-                ci = sourceCi // { stepName = "Flake evaluation"; };
-                runtimeInputs = pkgs: [ pkgs.git pkgs.nix ];
-                exec = ''
-                  ${repositoryRoot}
-                  nix flake check --no-build --print-build-logs
                 '';
               };
               workflow-sync = {
