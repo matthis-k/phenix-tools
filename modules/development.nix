@@ -96,7 +96,9 @@
             commands = {
               nix-format = {
                 description = "Nix formatting";
-                ci = sourceCi // { stepName = "Nix formatting"; };
+                ci = sourceCi // {
+                  stepName = "Nix formatting";
+                };
                 runtimeInputs = pkgs: [
                   pkgs.findutils
                   pkgs.git
@@ -110,7 +112,9 @@
               };
               statix = {
                 description = "Nix static analysis";
-                ci = sourceCi // { stepName = "Statix"; };
+                ci = sourceCi // {
+                  stepName = "Statix";
+                };
                 runtimeInputs = pkgs: [
                   pkgs.git
                   pkgs.statix
@@ -122,7 +126,9 @@
               };
               deadnix = {
                 description = "Unused Nix code";
-                ci = sourceCi // { stepName = "Deadnix"; };
+                ci = sourceCi // {
+                  stepName = "Deadnix";
+                };
                 runtimeInputs = pkgs: [
                   pkgs.deadnix
                   pkgs.git
@@ -134,7 +140,9 @@
               };
               actionlint = {
                 description = "GitHub Actions syntax";
-                ci = sourceCi // { stepName = "Actionlint"; };
+                ci = sourceCi // {
+                  stepName = "Actionlint";
+                };
                 runtimeInputs = pkgs: [
                   pkgs.actionlint
                   pkgs.findutils
@@ -148,7 +156,9 @@
               };
               boundary = {
                 description = "Keep phenix-tools a thin Nix aggregator";
-                ci = sourceCi // { stepName = "Repository boundary"; };
+                ci = sourceCi // {
+                  stepName = "Repository boundary";
+                };
                 runtimeInputs = pkgs: [
                   pkgs.coreutils
                   pkgs.git
@@ -162,7 +172,9 @@
               };
               workflow-sync = {
                 description = "Committed workflow matches the maintenance declaration";
-                ci = sourceCi // { stepName = "Generated workflow"; };
+                ci = sourceCi // {
+                  stepName = "Generated workflow";
+                };
                 runtimeInputs = pkgs: [
                   pkgs.diffutils
                   pkgs.git
@@ -185,7 +197,9 @@
             order = [ "phenix-dev" ];
             commands.phenix-dev = {
               description = "Exercise workspace discovery and nix develop through phenix-dev";
-              ci = productCi // { stepName = "Phenix dev workspace flow"; };
+              ci = productCi // {
+                stepName = "Phenix dev workspace flow";
+              };
               runtimeInputs = pkgs: [
                 phenixDev
                 pkgs.git
@@ -276,7 +290,7 @@
           pkgs.nix
           maintenancePackage.package
         ];
-        shellHook = maintenancePackage.shellHook;
+        inherit (maintenancePackage) shellHook;
       };
     };
 }
