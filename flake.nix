@@ -2,17 +2,29 @@
   description = "Thin aggregation of Phenix command-line tools";
 
   inputs = {
-    flake-parts.url = "github:hercules-ci/flake-parts";
-    phenix-pins.url = "github:matthis-k/phenix-pins";
+    phenix-flake-ci.url = "github:matthis-k/phenix-flake-ci";
+    phenix-pins = {
+      url = "github:matthis-k/phenix-pins";
+      inputs.phenix-flake-ci.follows = "phenix-flake-ci";
+    };
+    flake-parts.follows = "phenix-pins/flake-parts";
     nixpkgs.follows = "phenix-pins/nixpkgs";
     phenix-stitch = {
       url = "github:matthis-k/phenix-stitch";
       inputs = {
-        phenix-pins.follows = "phenix-pins";
         flake-parts.follows = "flake-parts";
+        phenix-flake-ci.follows = "phenix-flake-ci";
+        phenix-pins.follows = "phenix-pins";
       };
     };
-    phenix-opencode.url = "github:matthis-k/phenix-opencode";
+    phenix-agent-harness = {
+      url = "github:matthis-k/phenix-agent-harness";
+      inputs = {
+        phenix-flake-ci.follows = "phenix-flake-ci";
+        phenix-pins.follows = "phenix-pins";
+        phenix-stitch.follows = "phenix-stitch";
+      };
+    };
   };
 
   outputs =
