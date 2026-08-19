@@ -135,15 +135,14 @@
         ],
         "phenix-stitch": [
           "phenix-stitch"
-        ],
-        "pi-src": "pi-src"
+        ]
       },
       "locked": {
-        "lastModified": 1786402998,
-        "narHash": "sha256-z4xABU3entkl8uooYcBbcDPamK18CNZfT3zekKc32qY=",
+        "lastModified": 1787142445,
+        "narHash": "sha256-9vsFl5TVCETYn48YHzCcRjo3YmD0knha6WKai7RqyP0=",
         "owner": "matthis-k",
         "repo": "phenix-agent-harness",
-        "rev": "cb69e277f137a9eb65ca27dc598a689aa1c1bc67",
+        "rev": "9b38ffad79a96a09e418f23b69b1efb605e44c98",
         "type": "github"
       },
       "original": {
@@ -223,23 +222,6 @@
       "original": {
         "owner": "matthis-k",
         "repo": "phenix-stitch",
-        "type": "github"
-      }
-    },
-    "pi-src": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1784239181,
-        "narHash": "sha256-Vs/ndHYzFyfN4CjPV2zMYblLXe9IuM13UrPJI1VsZEQ=",
-        "owner": "earendil-works",
-        "repo": "pi",
-        "rev": "8dc78834cde4e329284cf505f9e3f99763df5529",
-        "type": "github"
-      },
-      "original": {
-        "owner": "earendil-works",
-        "ref": "v0.80.10",
-        "repo": "pi",
         "type": "github"
       }
     },
