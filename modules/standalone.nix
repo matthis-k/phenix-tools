@@ -10,12 +10,11 @@
     let
       stitch = inputs.phenix-stitch.packages.${system}.stitch;
       stitchMcp = inputs.phenix-stitch.packages.${system}.stitch-mcp;
-      phenix = inputs.phenix-agent-harness.packages.${system}.default;
       workspace = config.packages.phenix-workspace;
     in
     {
       packages = {
-        inherit stitch phenix;
+        inherit stitch;
         stitch-mcp = stitchMcp;
         default = stitch;
       };
@@ -23,7 +22,6 @@
       apps = {
         stitch = inputs.phenix-stitch.apps.${system}.stitch;
         stitch-mcp = inputs.phenix-stitch.apps.${system}.stitch-mcp;
-        phenix = inputs.phenix-agent-harness.apps.${system}.default;
         default = inputs.phenix-stitch.apps.${system}.stitch;
       };
 
