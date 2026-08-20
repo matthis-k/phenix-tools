@@ -1,5 +1,5 @@
 {
-  description = "Thin aggregation of Phenix command-line tools";
+  description = "Phenix workspace, maintenance, and Stitch tools";
 
   inputs = {
     phenix-flake-ci.url = "github:matthis-k/phenix-flake-ci";
@@ -15,14 +15,6 @@
         flake-parts.follows = "flake-parts";
         phenix-flake-ci.follows = "phenix-flake-ci";
         phenix-pins.follows = "phenix-pins";
-      };
-    };
-    phenix-agent-harness = {
-      url = "github:matthis-k/phenix-agent-harness";
-      inputs = {
-        phenix-flake-ci.follows = "phenix-flake-ci";
-        phenix-pins.follows = "phenix-pins";
-        phenix-stitch.follows = "phenix-stitch";
       };
     };
   };
