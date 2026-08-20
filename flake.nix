@@ -1,5 +1,5 @@
 {
-  description = "Thin aggregation of Phenix command-line tools";
+  description = "Phenix workspace, maintenance, and Stitch tools";
 
   inputs = {
     phenix-flake-ci.url = "github:matthis-k/phenix-flake-ci";
