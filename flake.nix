@@ -17,14 +17,6 @@
         phenix-pins.follows = "phenix-pins";
       };
     };
-    phenix-agent-harness = {
-      url = "github:matthis-k/phenix-agent-harness";
-      inputs = {
-        phenix-flake-ci.follows = "phenix-flake-ci";
-        phenix-pins.follows = "phenix-pins";
-        phenix-stitch.follows = "phenix-stitch";
-      };
-    };
   };
 
   outputs =
